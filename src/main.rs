@@ -1,5 +1,7 @@
+mod agent;
 mod config;
 mod error;
+mod llm;
 mod lsp;
 mod project;
 mod tools;
