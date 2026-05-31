@@ -69,6 +69,7 @@ async fn run_inner(
     let mut turn_task: Option<tokio::task::JoinHandle<Agent>> = None;
     let mut streaming = false;
     let mut last_msg: Option<std::time::Instant> = None;
+    let mut snap: Option<StreamSnapshot> = None;
 
     let primary_lang = format!("{} [{}]", profile.primary, profile.build_system);
     let ds = detection_source.to_string();
@@ -76,29 +77,39 @@ async fn run_inner(
     let gd = git_dirty;
 
     loop {
-        if let Some(a) = agent_opt.as_ref() {
+        {
             let history = chat_history.lock().expect("history lock");
             let offset = *scroll_offset.lock().expect("scroll lock");
             let snapshot = history.clone();
             drop(history);
 
+            let (tool_names, model, mode, ctx_used, ctx_total, cost, calls) =
+                if let Some(a) = agent_opt.as_ref() {
+                    (a.tool_names(), a.model_name().to_string(), mode_str(a.mode()),
+                     a.context_used(), a.context_total(), a.session_cost(), a.session_call_count())
+                } else if let Some(ref s) = snap {
+                    (s.tool_names.clone(), s.model.clone(), s.mode.clone(), 0u64, 1_000_000u64, 0.0, 0u64)
+                } else {
+                    continue;
+                };
+
+            let task_str = if streaming { "thinking...".to_string() } else { "idle".to_string() };
+
             let state = UiState {
                 sidebar_visible,
-                tool_names: a.tool_names(),
+                tool_names: tool_names.clone(),
                 status: StatusBarState {
-                    dir: std::env::current_dir()
-                        .map(|d| d.to_string_lossy().to_string())
-                        .unwrap_or_default(),
+                    dir: std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
                     git_branch: gb.clone(),
                     git_dirty: gd,
-                    task: "idle".to_string(),
-                    model: a.model_name().to_string(),
-                    ctx_used: a.context_used(),
-                    ctx_total: a.context_total(),
-                    tool_count: a.tool_names().len(),
-                    session_cost: a.session_cost(),
-                    session_calls: a.session_call_count(),
-                    mode: mode_str(a.mode()),
+                    task: task_str,
+                    model: model.clone(),
+                    ctx_used,
+                    ctx_total,
+                    tool_count: tool_names.len(),
+                    session_cost: cost,
+                    session_calls: calls,
+                    mode: mode.clone(),
                     elapsed: elapsed_str(last_msg),
                 },
                 tool_result: None,
@@ -111,8 +122,9 @@ async fn run_inner(
                 detection_source: ds.clone(),
             };
 
-            let mut t = terminal.lock().expect("terminal lock");
-            let _ = t.draw(|frame| crate::ui::layout::render_ui(frame, &state));
+            if let Ok(mut t) = terminal.lock() {
+                let _ = t.draw(|frame| crate::ui::layout::render_ui(frame, &state));
+            }
         }
 
         tokio::select! {
@@ -120,6 +132,7 @@ async fn run_inner(
 
             result = wait_turn(&mut turn_task) => {
                 turn_task = None;
+                snap = None;
                 match result {
                     Some(a) => {
                         agent_opt = Some(a);
@@ -191,6 +204,12 @@ async fn run_inner(
                             let tool_names = a.tool_names();
                             let model_s = a.model_name().to_string();
                             let mode_s = mode_str(a.mode());
+                            snap = Some(StreamSnapshot {
+                                tool_names: tool_names.clone(),
+                                model: model_s.clone(),
+                                mode: mode_s.clone(),
+                                dir: std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
+                            });
 
                             let terminal_clone = Arc::clone(&terminal);
                             let history_clone = Arc::clone(&chat_history);
@@ -220,7 +239,7 @@ async fn run_inner(
                                             *tool_clone.lock().expect("tool lock") = name.to_string();
                                         }
                                     }
-                                    *scroll_clone.lock().expect("scroll lock") = 0;
+                                    // Don't reset scroll — user might be scrolling
 
                                     let now = std::time::Instant::now();
                                     if now.duration_since(*last_draw.lock().expect("last draw lock")).as_millis() < 20 {
@@ -355,6 +374,13 @@ fn mode_str(mode: AgentMode) -> String {
         AgentMode::Normal => "build".into(),
         AgentMode::Plan => "plan".into(),
     }
+}
+
+struct StreamSnapshot {
+    tool_names: Vec<String>,
+    model: String,
+    mode: String,
+    dir: String,
 }
 
 fn elapsed_str(since: Option<std::time::Instant>) -> String {

@@ -35,7 +35,6 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
     let [scroll_area_raw, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(content_area);
 
-    // Global 4-char padding around content
     let scroll_area = Rect::new(
         scroll_area_raw.x + 4,
         scroll_area_raw.y + 1,
@@ -43,102 +42,45 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
         scroll_area_raw.height.saturating_sub(2),
     );
 
-    let [output_area_raw, input_area_raw] =
+    let [output_area, input_area_raw] =
         Layout::vertical([Constraint::Min(4), Constraint::Length(1)]).areas(scroll_area);
 
-    // Output area with horizontal padding for message blocks
-    let output_area = Rect::new(
-        output_area_raw.x,
-        output_area_raw.y,
-        output_area_raw.width,
-        output_area_raw.height,
-    );
-
-    let content_bg = Block::default().style(Style::default().bg(Color::Rgb(239, 241, 245)));
-    frame.render_widget(content_bg, scroll_area);
-
-    if let Some(ref result) = state.tool_result {
-        render::tool_result(frame, output_area, result);
-    } else {
-        let _y = output_area.y;
-
-        // Collect blocks with is_user flag
-        let streaming = state.streaming.as_deref();
-        let mut blocks: Vec<(&str, bool)> = state.history.iter().map(|s| (s.as_str(), false)).collect();
-        for (text, is_user) in &mut blocks {
-            if text.starts_with('\u{25b8}') || text.starts_with('\u{203a}') {
-                *is_user = true;
-            }
-        }
-        if let Some(s) = streaming {
-            blocks.push((s, false));
-        }
-
-        // Render from the LAST block backward
-        let visible_rows = output_area.height;
-        let mut y = output_area.y + output_area.height;
-        let mut first_visible = blocks.len();
-        let mut skip = state.scroll_offset as u16;
-        let mut partial = 0u16;
-        let mut need = visible_rows;
-
-        for i in (0..blocks.len()).rev() {
-            let h = (blocks[i].0.lines().count() + 2) as u16;
-            if skip > 0 {
-                if h <= skip {
-                    skip -= h;
-                    continue;
-                }
-                partial = skip;
-                skip = 0;
-            }
-            if need == 0 {
-                break;
-            }
-            first_visible = i;
-            need = need.saturating_sub(h);
-            y = y.saturating_sub(h);
-        }
-
-        // Render from first_visible to end
-        for i in first_visible..blocks.len() {
-            if y >= output_area.y + output_area.height {
-                break;
-            }
-
-            let (text, is_user) = blocks[i];
-            let mut lines: Vec<&str> = text.lines().collect();
-            let total_block_height = (lines.len() + 2) as u16;
-
-            // Apply partial skip
-            if partial > 0 {
-                let skip_lines = partial.saturating_sub(1).min(lines.len() as u16) as usize;
-                if skip_lines > 0 {
-                    lines = lines[skip_lines..].to_vec();
-                }
-                partial = 0;
-            }
-
-            let remaining = (output_area.y + output_area.height).saturating_sub(y);
-            let avail = (remaining as usize).saturating_sub(2);
-            let show_lines: Vec<&str> = if lines.len() > avail {
-                lines[..avail].to_vec()
-            } else {
-                lines
-            };
-
-            if show_lines.is_empty() {
-                y = y.saturating_add(total_block_height);
-                continue;
-            }
-
-            let content = show_lines.join("\n");
-            let block_height = (show_lines.len() + 2) as u16;
-            let block_area = Rect::new(output_area.x, y, output_area.width, block_height.min(output_area.height));
-            render::message_block(frame, block_area, &content, is_user);
-            y = y.saturating_add(block_height);
+    // Flatten all messages into a single Vec<Line> with markdown rendering
+    let mut all_lines: Vec<Line> = Vec::new();
+    for msg in &state.history {
+        let prefix = if msg.starts_with('\u{25b8}') { "\u{25b8} " } else { "" };
+        let is_user = !prefix.is_empty();
+        if is_user {
+            let text = msg.strip_prefix("\u{25b8} ").unwrap_or(msg);
+            all_lines.push(Line::from(Span::styled(
+                format!("\u{25b8} {text}"),
+                Style::default().fg(Color::Rgb(30, 102, 245)).add_modifier(Modifier::BOLD),
+            )));
+            all_lines.push(Line::from(""));
+        } else {
+            let rendered = render::render_md(msg);
+            all_lines.extend(rendered);
+            all_lines.push(Line::from(""));
         }
     }
+    if let Some(s) = &state.streaming {
+        let rendered = render::render_md(s);
+        all_lines.extend(rendered);
+    }
+
+    // Line-based scroll: scroll_offset lines from the bottom
+    let total = all_lines.len();
+    let visible = output_area.height as usize;
+    let skip = state.scroll_offset.min(total.saturating_sub(1));
+    let start = total.saturating_sub(skip + visible);
+    let slice: Vec<Line> = all_lines.into_iter().skip(start).take(visible + skip).collect();
+
+    let paragraph = Paragraph::new(slice)
+        .block(Block::default())
+        .style(Style::default().fg(Color::Rgb(76, 79, 105)))
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, output_area);
 
     render::user_input(frame, input_area_raw, &state.user_input);
     statusbar::render(frame, status_area, &state.status);
@@ -180,7 +122,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &UiState) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "─".repeat(22),
+        "\u{2500}".repeat(22),
         Style::default().fg(Color::Rgb(172, 176, 190)),
     )));
     lines.push(Line::from(vec![

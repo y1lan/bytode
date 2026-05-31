@@ -127,7 +127,7 @@ pub fn message_block(frame: &mut Frame, area: Rect, content: &str, is_user: bool
     frame.render_widget(paragraph, area);
 }
 
-fn render_md(content: &str) -> Vec<Line<'_>> {
+pub fn render_md(content: &str) -> Vec<Line<'_>> {
     let mut out: Vec<Line<'_>> = Vec::new();
     let mut in_code_block = false;
 
