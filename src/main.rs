@@ -1,5 +1,7 @@
 mod config;
 mod error;
+mod project;
+mod tools;
 
 use clap::Parser;
 use error::Result;
@@ -28,6 +30,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let project_root = std::fs::canonicalize(&cli.project)?;
     let config = config::Config::load(&project_root)?;
+
+    let profile = project::ProjectProfile::detect(&project_root, &config)?;
+    tracing::info!(
+        "detected: {:?} ({:?})",
+        profile.primary,
+        profile.build_system
+    );
+    tracing::info!("snapshot:\n{}", profile.snapshot());
 
     tracing::info!("bytode v0.1.0 — {:?}", cli.task);
     tracing::info!("project root: {}", project_root.display());
