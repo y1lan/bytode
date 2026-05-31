@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
 
     match cli.task {
         Some(task) => {
-            eprintln!("⏳ {}", task);
+            eprintln!("→ {}", task);
             agent
                 .run_turn_streaming(&task, |chunk| {
                     print!("{}", chunk);
@@ -203,6 +203,8 @@ async fn run_repl(
                 ctx_used: agent.context_used(),
                 ctx_total: agent.context_total(),
                 tool_count: agent.tool_names().len(),
+                session_cost: agent.session_cost(),
+                session_calls: agent.session_call_count(),
             },
             tool_result: None,
             llm_output: if visible_text.is_empty() { None } else { Some(visible_text) },
@@ -247,6 +249,8 @@ async fn run_repl(
                         let tool_names = agent.tool_names();
                         let ctx_used = agent.context_used();
                         let ctx_total = agent.context_total();
+                        let session_cost = agent.session_cost();
+                        let session_calls = agent.session_call_count();
                         let primary_lang =
                             format!("{} [{}]", profile.primary, profile.build_system);
                         let ds = detection_source.to_string();
@@ -283,6 +287,8 @@ async fn run_repl(
                                                 ctx_used,
                                                 ctx_total,
                                                 tool_count: tool_names.len(),
+                                                session_cost,
+                                                session_calls,
                                             },
                                             tool_result: None,
                                             llm_output: Some(display),

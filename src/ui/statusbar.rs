@@ -10,6 +10,8 @@ pub struct StatusBarState {
     pub ctx_used: u64,
     pub ctx_total: u64,
     pub tool_count: usize,
+    pub session_cost: f64,
+    pub session_calls: u64,
 }
 
 pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
@@ -75,6 +77,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
         Span::styled("│", Style::default().fg(Color::Rgb(200, 200, 210))),
         Span::styled(" ctx ", Style::default().fg(Color::Rgb(160, 160, 170))),
         Span::styled(draw_ctx_bar(state.ctx_used, state.ctx_total), ctx_color),
+        Span::styled(
+            format!("  ${:.4}", state.session_cost),
+            Style::default().fg(if state.session_cost > 0.01 {
+                Color::Rgb(200, 100, 0)
+            } else {
+                Color::Rgb(140, 140, 150)
+            }),
+        ),
         Span::styled(
             format!("  ctrl+t tools:{}", state.tool_count),
             Style::default().fg(Color::Rgb(180, 180, 190)),

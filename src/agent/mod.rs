@@ -124,6 +124,18 @@ impl Agent {
     pub fn tool_names(&self) -> Vec<String> {
         self.registry.active_names()
     }
+    pub fn session_input_tokens(&self) -> u64 {
+        self.llm.session_input_tokens()
+    }
+    pub fn session_output_tokens(&self) -> u64 {
+        self.llm.session_output_tokens()
+    }
+    pub fn session_cost(&self) -> f64 {
+        self.llm.session_cost()
+    }
+    pub fn session_call_count(&self) -> u64 {
+        self.llm.session_call_count()
+    }
 }
 
 #[derive(Debug, Clone)]
