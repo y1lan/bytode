@@ -4,3 +4,40 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# LLM
+async-openai = "0.27"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+futures = "0.3"
+
+# TUI
+ratatui = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# Data
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# jq filter
+jaq-parse = "1.0"
+jaq-interpret = "1.5"
+
+# Git
+git2 = "0.19"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+
+# Paths
+dirs = "5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async trait
+async-trait = "0.1"
