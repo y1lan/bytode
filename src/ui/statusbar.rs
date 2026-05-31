@@ -34,8 +34,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
                 .fg(Color::Rgb(223, 142, 29))
                 .add_modifier(Modifier::SLOW_BLINK),
         )
-    } else if state.task.contains("idle") {
-        (" idle", Style::default().fg(Color::Rgb(172, 176, 190)))
     } else {
         ("", Style::default().fg(Color::Rgb(76, 79, 105)))
     };

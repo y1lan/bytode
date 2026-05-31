@@ -259,7 +259,7 @@ impl Agent {
 
     /// Reconstruct chat history text from loaded turns for UI display
     pub fn chat_history_text(&self) -> Vec<String> {
-        self.context.memory.recent_turns().iter().filter_map(|t| {
+        self.context.memory.recent_turns().iter().flat_map(|t| {
             let mut entries = Vec::new();
             if let Some(ref input) = t.user_input {
                 entries.push(format!("\u{25b8} {}", input));
@@ -268,7 +268,7 @@ impl Agent {
                 && !text.is_empty() {
                     entries.push(text.clone());
                 }
-            if entries.is_empty() { None } else { Some(entries.join("\n")) }
+            entries
         }).collect()
     }
 }

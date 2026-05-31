@@ -82,7 +82,7 @@ async fn run_inner(
                 status: StatusBarState {
                     dir: std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
                     git_branch: gb.clone(), git_dirty: gd,
-                    task: if streaming { "thinking...".into() } else { "idle".into() },
+                    task: if streaming { "thinking...".into() } else { String::new() },
                     model: model.clone(), ctx_used: cu, ctx_total: ct,
                     tool_count: tn.len(), session_cost: cost, session_calls: calls,
                     mode: mode.clone(), elapsed: elapsed_fmt(last_msg), spinner: spinner_char(),
@@ -111,6 +111,7 @@ async fn run_inner(
                     None => {
                         rx = None;
                         streaming = false;
+                        last_msg = None;
                         let ft = std::mem::take(&mut stream_buf);
                         if !ft.is_empty() {
                             // Split stream_buf into assistant text segments and tool call segments

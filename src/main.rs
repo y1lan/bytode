@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     // Session persistence
     let session_dir = dirs::home_dir().unwrap().join(".bycode").join("sessions");
     std::fs::create_dir_all(&session_dir)?;
-    let session_file = session_path(&project_root, &session_dir);
+    let mut session_file = session_path(&project_root, &session_dir);
 
     // Session selection if in REPL mode
     let mut chat_history_init: Vec<String> = Vec::new();
@@ -189,9 +189,20 @@ async fn main() -> Result<()> {
                     _ => continue,
                 };
                 if choice == sessions.len() + 1 {
-                    // Start new session
+                    // New session: use timestamped filename to avoid overwriting
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let hash = session_path(&project_root, &session_dir)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    session_file = session_dir.join(format!("{hash}_{:x}.json", ts));
                 } else if let Some(s) = sessions.get(choice - 1) {
                     if agent.load_session(&s.path).is_ok() {
+                        session_file = s.path.clone();
                         chat_history_init = agent.chat_history_text();
                         eprintln!("Loaded session: {}\n", s.name);
                     } else {
