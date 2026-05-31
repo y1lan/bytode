@@ -11,7 +11,7 @@ pub struct CheckTool {
 #[async_trait]
 impl Tool for CheckTool {
     fn name(&self) -> &'static str {
-        "run_check"
+        "cargo_check"
     }
 
     fn description(&self) -> &'static str {
@@ -57,7 +57,7 @@ RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }
         cmd.args(&self.extra_args);
 
         let output = cmd.output().map_err(|e| BytodeError::Tool {
-            tool: "run_check".into(),
+            tool: "cargo_check".into(),
             message: format!("cargo check failed to start: {}", e),
         })?;
 

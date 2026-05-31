@@ -46,7 +46,7 @@ Example config at project root overrides user config.
 | `read_file` | Always | Read file with line numbers, supports offset/limit |
 | `write_file` | Always | Atomic write with diff + approval |
 | `search_code` | Always | `rg --json --line-number --no-heading` |
-| `run_check` | Rust only | `cargo check --message-format json` with simple filter |
+| `cargo_check` | Rust only | `cargo check --message-format json` with simple filter |
 | `get_diagnostics` | Rust only | Reads LSP `publishDiagnostics` cache |
 
 ## Code Layout
@@ -66,4 +66,4 @@ src/
 
 ## Workflow
 
-Normal cycle: `read_file → edit → run_check/get_diagnostics → repeat`. The SOP (Standard Operating Procedure) prompt injects after build failures, mandating diagnostics-first approach.
+Normal cycle: `read_file → edit → cargo_check/get_diagnostics → repeat`. The SOP (Standard Operating Procedure) prompt injects after build failures, mandating diagnostics-first approach.

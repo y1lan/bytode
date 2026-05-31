@@ -18,7 +18,7 @@ pub struct CargoTool {
 #[async_trait]
 impl Tool for CargoTool {
     fn name(&self) -> &'static str {
-        "run_cargo"
+        "cargo"
     }
 
     fn description(&self) -> &'static str {
@@ -67,14 +67,14 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let cmd_name = args["cmd"].as_str().ok_or_else(|| BytodeError::Tool {
-            tool: "run_cargo".into(),
+            tool: "cargo".into(),
             message: "missing 'cmd' argument".into(),
         })?;
 
         let whitelist: HashSet<&str> = WHITELISTED_SUBCOMMANDS.iter().copied().collect();
         if !whitelist.contains(cmd_name) {
             return Err(BytodeError::Tool {
-                tool: "run_cargo".into(),
+                tool: "cargo".into(),
                 message: format!(
                     "subcommand '{}' is not whitelisted. Allowed: {}",
                     cmd_name,
@@ -96,7 +96,7 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#
         }
 
         let output = cmd.output().map_err(|e| BytodeError::Tool {
-            tool: "run_cargo".into(),
+            tool: "cargo".into(),
             message: format!("cargo {} failed to start: {}", cmd_name, e),
         })?;
 

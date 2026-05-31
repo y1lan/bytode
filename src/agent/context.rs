@@ -121,10 +121,10 @@ fn build_core_prompt(profile: &ProjectProfile, registry: &ToolRegistry) -> Strin
 ## Behaviour Rules
 1. Read before write — always use read_file before editing
 2. Cite file:line — when referencing code, always give file path and line number
-3. Diagnose first — after any build failure, use get_diagnostics or run_check first
+3. Diagnose first — after any build failure, use get_diagnostics or cargo_check first
 4. Never grep for errors — get_diagnostics is the ONLY source of build diagnostics
-5. Fix one at a time — fix one error, then run_check to verify, then next
-6. Verify before claiming done — run_check with filter "length" to confirm zero diagnostics
+5. Fix one at a time — fix one error, then cargo_check to verify, then next
+6. Verify before claiming done — cargo_check with filter "length" to confirm zero diagnostics
 
 ## Available Tools
 {}
@@ -154,12 +154,12 @@ Address ERRORS first, then warnings.
 Fix ONE error at a time.
 
 ### Step 3: Verify After Each Fix
-After each fix, call run_check with filter="length" to verify.
+After each fix, call cargo_check with filter="length" to verify.
 Zero diagnostics = fixed. Non-zero = continue.
 
 ### Step 4: Adversarial Verification
 When you believe all errors are fixed:
-1. run_check with filter="length" — must return 0
+1. cargo_check with filter="length" — must return 0
 2. get_diagnostics with filter="errors" — must return []
 3. Do NOT claim "it should be fixed" or "probably works".
    Evidence or it didn't happen."#

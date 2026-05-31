@@ -305,7 +305,7 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
             if let Some(f) = args["filter"].as_str() { parts.push(format!("filter={f}")); }
             if parts.is_empty() { "?".into() } else { parts.join(", ") }
         }
-        "run_cargo" => {
+        "cargo" => {
             let cmd = args["cmd"].as_str().unwrap_or("?");
             if let Some(extra) = args["args"].as_array() {
                 let ex: Vec<&str> = extra.iter().filter_map(|v| v.as_str()).collect();
@@ -314,7 +314,7 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
                 cmd.to_string()
             }
         }
-        "run_check" => {
+        "cargo_check" => {
             if let Some(e) = args["extra_args"].as_array() {
                 let ex: Vec<&str> = e.iter().filter_map(|v| v.as_str()).collect();
                 if ex.is_empty() { "?".into() } else { ex.join(" ") }

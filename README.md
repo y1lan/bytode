@@ -102,7 +102,7 @@ cargo run -- --model deepseek-v4-flash
 - `write_file`
 - `git_status` / `git_diff` / `git_log`
 
-其他工具（`read_file`、`search_code`、`get_diagnostics`、`run_check`、`web_search`、`run_cargo`）照常可用。切换模式时即时重建核心提示词中的工具列表。
+其他工具（`read_file`、`search_code`、`get_diagnostics`、`cargo_check`、`web_search`、`cargo`）照常可用。切换模式时即时重建核心提示词中的工具列表。
 
 ## 工具列表
 
@@ -113,9 +113,9 @@ cargo run -- --model deepseek-v4-flash
 | `read_file` | 只读 | 始终 | 30s | 读取文件（行号 + offset/limit）或列出目录（含文件大小） |
 | `write_file` | 修改 | 始终 | 10s | 原子写入（临时文件 + 重命名），diff 输出，自动 `didChange` 通知 LSP |
 | `search_code` | 只读 | 始终 | 15s | `rg --json --line-number --no-heading`，支持 pattern 和 path |
-| `run_check` | 构建 | Rust | 120s | `cargo check --message-format json`，支持 simple filter（errors/warnings/length） |
+| `cargo_check` | 构建 | Rust | 120s | `cargo check --message-format json`，支持 simple filter（errors/warnings/length） |
 | `get_diagnostics` | 只读 | Rust | 5s | 从 rust-analyzer `publishDiagnostics` 缓存读取，支持 path/filter |
-| `run_cargo` | 构建 | Rust | 120s | 白名单 Cargo 子命令：check/build/test/clippy/fmt/doc/bench/run/clean/update |
+| `cargo` | 构建 | Rust | 120s | 白名单 Cargo 子命令：check/build/test/clippy/fmt/doc/bench/run/clean/update |
 | `web_search` | 只读 | 始终 | 可配 | DuckDuckGo HTML 搜索（无需 API Key），支持代理 |
 | `git_status` | 只读 | 始终 | 10s | `git status --porcelain`，支持 path 过滤 |
 | `git_diff` | 只读 | 始终 | 15s | `git diff` / `git diff --cached`，支持 staged + path |
@@ -142,7 +142,7 @@ cargo run -- --model deepseek-v4-flash
 | `Json` | `cargo check` 的 JSON 诊断（支持 filter） |
 | `Matches` | `search_code` 的匹配结果 |
 | `WriteConfirmation` | 写入确认（含 diff） |
-| `Text` | 通用文本响应（`git_*`、`web_search`、`run_cargo`、错误消息） |
+| `Text` | 通用文本响应（`git_*`、`web_search`、`cargo`、错误消息） |
 
 ## 配置
 
@@ -207,9 +207,9 @@ src/
 │   ├── mod.rs        # Tool trait + ToolRegistry + ToolResult 枚举
 │   ├── file.rs       # read_file（含目录列表）/ write_file（原子 + diff）
 │   ├── search.rs     # search_code (ripgrep --json)
-│   ├── check.rs      # run_check (cargo check --json + simple filter)
+│   ├── check.rs      # cargo_check (cargo check --json + simple filter)
 │   ├── lsp_diag.rs   # get_diagnostics (rust-analyzer 缓存)
-│   ├── cargo.rs      # run_cargo (白名单子命令)
+│   ├── cargo.rs      # cargo (白名单子命令)
 │   ├── web.rs        # web_search (DuckDuckGo HTML 解析)
 │   └── git.rs        # git_status / git_diff / git_log
 ├── lsp/
@@ -281,13 +281,13 @@ Token 估算：`1 token ≈ 4 chars`（序列化 JSON 长度 / 4）。
 ## 工作流程
 
 ```
-read_file → 编辑 → run_check / get_diagnostics → 重复
+read_file → 编辑 → cargo_check / get_diagnostics → 重复
 ```
 
 1. **Read before write** — 编辑前必须先读取文件内容
 2. **Diagnose first** — 构建失败后立即调用 `get_diagnostics`，不要 grep 错误日志
-3. **Fix one at a time** — 一次修一个错误，修完立即 `run_check` 验证
-4. **Evidence before claims** — 不说"应该修好了"，以 `run_check` filter `"length"` 返回 0 为唯一标准
+3. **Fix one at a time** — 一次修一个错误，修完立即 `cargo_check` 验证
+4. **Evidence before claims** — 不说"应该修好了"，以 `cargo_check` filter `"length"` 返回 0 为唯一标准
 
 ## 项目检测
 

@@ -145,7 +145,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &UiState) {
             "read_file" => Color::Rgb(64, 160, 43),
             "write_file" => Color::Rgb(223, 142, 29),
             "search_code" => Color::Rgb(32, 159, 181),
-            "run_check" => Color::Rgb(136, 57, 239),
+            "cargo_check" => Color::Rgb(136, 57, 239),
             "get_diagnostics" => Color::Rgb(210, 15, 57),
             _ => Color::Rgb(156, 160, 176),
         };
