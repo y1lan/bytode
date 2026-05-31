@@ -47,6 +47,7 @@ pub struct MemoryLayer {
 
 #[derive(Serialize, Deserialize)]
 pub struct SessionData {
+    pub project_path: Option<String>,
     pub turns: Vec<Turn>,
     pub summary: Option<String>,
 }
@@ -72,6 +73,7 @@ impl MemoryLayer {
 
     pub fn session_data(&self) -> SessionData {
         SessionData {
+            project_path: None,
             turns: self
                 .recent
                 .iter()

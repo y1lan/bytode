@@ -16,9 +16,10 @@ impl Tool for ReadFileTool {
     }
 
     fn description(&self) -> &'static str {
-        r#"Read a file from disk. Returns content with line numbers prefixed.
+        r#"Read a file or list a directory. Returns line-numbered content for files, tree listing for directories.
 
 WHEN TO USE: Before editing any file. When you need to understand code structure.
+When you need to discover what files exist in a directory.
 WHEN NOT TO USE: For searching across files — use search_code instead.
 For compiler errors — use get_diagnostics instead.
 
@@ -26,9 +27,10 @@ EXAMPLES:
   read_file(path="/home/user/project/src/main.rs")           # read a file
   read_file(path="/home/user/project/src/main.rs", offset=10) # read from line 10
   read_file(path="/home/user/project/src/main.rs", limit=50)  # read first 50 lines
-CAUTION: path must be a file, NOT a directory. Use search_code to discover files first.
+  read_file(path="/home/user/project/src")                   # list directory contents
 
-RETURNS: { "type": "file", path, content (with line numbers), line_count, total_bytes }"#
+RETURNS: For files: { "type": "file", path, content (with line numbers), line_count, total_bytes }.
+For directories: { "type": "text", path, content (tree listing with sizes and types) }."#
     }
 
     fn parameters_schema(&self) -> Value {
@@ -37,7 +39,7 @@ RETURNS: { "type": "file", path, content (with line numbers), line_count, total_
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute file path to read. Must point to a file, NOT a directory."
+                    "description": "Absolute file or directory path. Files return numbered content, directories return a listing."
                 },
                 "offset": {
                     "type": "integer",
@@ -65,6 +67,10 @@ RETURNS: { "type": "file", path, content (with line numbers), line_count, total_
         })?;
 
         let resolved = self.resolve_path(path_str)?;
+
+        if resolved.is_dir() {
+            return self.list_dir(&resolved);
+        }
         let content = std::fs::read_to_string(&resolved).map_err(|e| BytodeError::Tool {
             tool: "read_file".into(),
             message: format!("cannot read {}: {}", resolved.display(), e),
@@ -120,6 +126,58 @@ impl ReadFileTool {
         }
 
         Ok(canonical)
+    }
+
+    fn list_dir(&self, dir: &std::path::Path) -> Result<ToolResult> {
+        let mut entries: Vec<String> = Vec::new();
+        let mut iter = std::fs::read_dir(dir).map_err(|e| BytodeError::Tool {
+            tool: "read_file".into(),
+            message: format!("cannot read directory {}: {}", dir.display(), e),
+        })?;
+
+        while let Some(entry) = iter.next() {
+            let entry = entry.map_err(|e| BytodeError::Tool {
+                tool: "read_file".into(),
+                message: format!("error reading entry: {}", e),
+            })?;
+            let ft = entry.file_type().map_err(|e| BytodeError::Tool {
+                tool: "read_file".into(),
+                message: format!("cannot stat: {}", e),
+            })?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let suffix = if ft.is_dir() {
+                "/".to_string()
+            } else if ft.is_symlink() {
+                " -> ?".to_string()
+            } else {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                format!(" ({}B)", human_size(size))
+            };
+            entries.push(format!("  {}{}", name, suffix));
+        }
+        entries.sort();
+
+        let content = format!(
+            "{}/\n{}",
+            dir.to_string_lossy(),
+            entries.join("\n")
+        );
+
+        Ok(ToolResult::Text {
+            source: "read_file".into(),
+            content,
+            truncated: entries.len() > 200,
+        })
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}K", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 

@@ -13,6 +13,7 @@ pub struct StatusBarState {
     pub session_cost: f64,
     pub session_calls: u64,
     pub mode: String,
+    pub elapsed: String,
 }
 
 pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
@@ -90,6 +91,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
 
     let right = Line::from(vec![
         Span::styled(
+            format!(" {}", state.elapsed),
+            if state.elapsed.contains('s') {
+                Style::default().fg(Color::Rgb(156, 160, 176))
+            } else {
+                Style::default().fg(Color::Rgb(223, 142, 29))
+            },
+        ),
+        Span::styled(" │", Style::default().fg(Color::Rgb(172, 176, 190))),
+        Span::styled(
             format!("{} ", state.model),
             Style::default().fg(Color::Rgb(136, 57, 239)),
         ),
@@ -162,5 +172,5 @@ fn shorten_path(path: &str, max_len: usize) -> String {
             &shortened[shortened.len().saturating_sub(max_len - 3)..]
         );
     }
-    format!(".../{}", &parts[parts.len() - 2..].join("/"))
+    format!(".../{}", parts[parts.len() - 2..].join("/"))
 }

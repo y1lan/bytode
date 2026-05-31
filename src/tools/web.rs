@@ -151,9 +151,9 @@ fn parse_ddg_html(html: &str) -> Vec<String> {
 
         let section_end = html[body_start..].find("</div>").map(|i| body_start + i);
 
-        let title = extract_tag_content(&html, body_start, "result__title");
-        let snippet = extract_tag_content(&html, body_start, "result__snippet");
-        let link = extract_link(&html, body_start);
+        let title = extract_tag_content(html, body_start, "result__title");
+        let snippet = extract_tag_content(html, body_start, "result__snippet");
+        let link = extract_link(html, body_start);
 
         if !title.is_empty() || !snippet.is_empty() {
             let mut result = String::new();

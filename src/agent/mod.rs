@@ -105,13 +105,14 @@ impl Agent {
                     let tool_name = call.name.clone();
                     let tool_args = call.arguments.clone();
 
-                    on_text(&format!("\n  ⟳ {}(...)\n", tool_name));
+                    let args_summary = format_args(&call.name, &call.arguments);
+                    on_text(&format!("\n  ⟳ {}({})\n", tool_name, args_summary));
 
                     let tool_ref = self.registry.find(&call.name);
 
                     let result = match self.execute_tool(&call).await {
                         Ok(r) => {
-                            if let Some(ref tool) = tool_ref {
+                            if let Some(tool) = tool_ref {
                                 if let Some(display) = tool.format_result_for_display(&r) {
                                     on_text(&format!("{}\n", display));
                                 } else {
@@ -237,8 +238,9 @@ impl Agent {
         self.context.rebuild_core_prompt(&self.profile, &self.registry);
     }
 
-    pub fn save_session(&self, path: &Path) -> Result<()> {
-        let data = self.context.memory.session_data();
+    pub fn save_session(&self, path: &Path, project_path: &str) -> Result<()> {
+        let mut data = self.context.memory.session_data();
+        data.project_path = Some(project_path.to_string());
         let json = serde_json::to_string_pretty(&data).map_err(|e| {
             crate::error::BytodeError::Json(e)
         })?;
@@ -262,11 +264,10 @@ impl Agent {
             if let Some(ref input) = t.user_input {
                 entries.push(format!("\u{25b8} {}", input));
             }
-            if let Some(ref text) = t.assistant_text {
-                if !text.is_empty() {
+            if let Some(ref text) = t.assistant_text
+                && !text.is_empty() {
                     entries.push(text.clone());
                 }
-            }
             if entries.is_empty() { None } else { Some(entries.join("\n")) }
         }).collect()
     }
@@ -275,4 +276,69 @@ impl Agent {
 #[derive(Debug, Clone)]
 pub enum AgentOutput {
     Text(String),
+}
+
+fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
+    match tool_name {
+        "read_file" => {
+            let path = args["path"].as_str().unwrap_or("?");
+            let offset = args["offset"].as_u64().map(|o| format!(", offset={o}")).unwrap_or_default();
+            let limit = args["limit"].as_u64().map(|l| format!(", limit={l}")).unwrap_or_default();
+            format!("{path}{offset}{limit}")
+        }
+        "write_file" => {
+            args["path"].as_str().unwrap_or("?").to_string()
+        }
+        "search_code" => {
+            let pat = args["pattern"].as_str().unwrap_or("?");
+            if let Some(p) = args["path"].as_str() {
+                format!("pattern=\"{pat}\", path={p}")
+            } else {
+                format!("pattern=\"{pat}\"")
+            }
+        }
+        "get_diagnostics" => {
+            let mut parts = Vec::new();
+            if let Some(p) = args["path"].as_str() { parts.push(format!("path={p}")); }
+            if let Some(f) = args["filter"].as_str() { parts.push(format!("filter={f}")); }
+            if parts.is_empty() { "?".into() } else { parts.join(", ") }
+        }
+        "run_cargo" => {
+            let cmd = args["cmd"].as_str().unwrap_or("?");
+            if let Some(extra) = args["args"].as_array() {
+                let ex: Vec<&str> = extra.iter().filter_map(|v| v.as_str()).collect();
+                if ex.is_empty() { cmd.to_string() } else { format!("{cmd} {}", ex.join(" ")) }
+            } else {
+                cmd.to_string()
+            }
+        }
+        "run_check" => {
+            if let Some(e) = args["extra_args"].as_array() {
+                let ex: Vec<&str> = e.iter().filter_map(|v| v.as_str()).collect();
+                if ex.is_empty() { "?".into() } else { ex.join(" ") }
+            } else {
+                "?".into()
+            }
+        }
+        "git_status" => args["path"].as_str().unwrap_or("").to_string(),
+        "git_diff" => {
+            let mut parts = Vec::new();
+            if args["staged"].as_bool().unwrap_or(false) { parts.push("staged"); }
+            if let Some(p) = args["path"].as_str() { parts.push(p); }
+            parts.join(", ")
+        }
+        "git_log" => {
+            let count = args["count"].as_u64().unwrap_or(10);
+            if let Some(p) = args["path"].as_str() {
+                format!("count={count}, path={p}")
+            } else {
+                format!("count={count}")
+            }
+        }
+        "web_search" => {
+            let q = args["query"].as_str().unwrap_or("?");
+            if q.len() > 60 { format!("\"{}...\"", &q[..57]) } else { format!("\"{q}\"") }
+        }
+        _ => "?".into(),
+    }
 }

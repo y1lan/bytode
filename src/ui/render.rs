@@ -95,9 +95,7 @@ const ORANGE: Color = Color::Rgb(223, 142, 29);
 const CYAN: Color = Color::Rgb(32, 159, 181);
 const GREEN: Color = Color::Rgb(64, 160, 43);
 const PURPLE: Color = Color::Rgb(136, 57, 239);
-const CODE_BG: Color = Color::Rgb(230, 233, 239);
 const CODE_FG: Color = Color::Rgb(242, 119, 122);
-const BG: Color = Color::Rgb(239, 241, 245);
 
 pub fn message_block(frame: &mut Frame, area: Rect, content: &str, is_user: bool) {
     let border_color = if is_user {
@@ -160,32 +158,28 @@ fn render_md(content: &str) -> Vec<Line<'_>> {
         }
 
         // Block-level patterns
-        if trimmed.starts_with("### ") {
-            let text = &trimmed[4..];
+        if let Some(text) = trimmed.strip_prefix("### ") {
             out.push(Line::from(Span::styled(
                 format!("   {}", text),
                 Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
             )));
             continue;
         }
-        if trimmed.starts_with("## ") {
-            let text = &trimmed[3..];
+        if let Some(text) = trimmed.strip_prefix("## ") {
             out.push(Line::from(Span::styled(
                 format!("   {}", text),
                 Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
             )));
             continue;
         }
-        if trimmed.starts_with("# ") {
-            let text = &trimmed[2..];
+        if let Some(text) = trimmed.strip_prefix("# ") {
             out.push(Line::from(Span::styled(
                 format!("   {}", text),
                 Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
             )));
             continue;
         }
-        if trimmed.starts_with("> ") {
-            let text = &trimmed[2..];
+        if let Some(text) = trimmed.strip_prefix("> ") {
             out.push(Line::from(Span::styled(
                 format!("   | {}", text),
                 Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::ITALIC),
@@ -203,8 +197,8 @@ fn render_md(content: &str) -> Vec<Line<'_>> {
             out.push(Line::from(line_spans));
             continue;
         }
-        if let Some(idx) = trimmed.find(". ") {
-            if idx > 0 && trimmed[..idx].chars().all(|c| c.is_ascii_digit()) {
+        if let Some(idx) = trimmed.find(". ")
+            && idx > 0 && trimmed[..idx].chars().all(|c| c.is_ascii_digit()) {
                 let num = &trimmed[..idx];
                 let text = &trimmed[idx + 2..];
                 let spans = parse_inline_md(text, false);
@@ -216,31 +210,37 @@ fn render_md(content: &str) -> Vec<Line<'_>> {
                 out.push(Line::from(line_spans));
                 continue;
             }
+
+        // Tool call pending spinner: "  ⟳ tool_name(args)"
+        if let Some(rest) = trimmed.strip_prefix("\u{27f3} ") {
+            if let Some((name, _args)) = rest.split_once('(') {
+                out.push(Line::from(vec![
+                    Span::styled(
+                        "   \u{27f3} ",
+                        Style::default().fg(ORANGE).add_modifier(Modifier::SLOW_BLINK),
+                    ),
+                    Span::styled(
+                        name,
+                        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        &rest[name.len()..],
+                        Style::default().fg(CYAN).add_modifier(Modifier::DIM),
+                    ),
+                ]));
+                continue;
+            }
         }
 
-        // Tool call pending spinner
-        if trimmed.starts_with("\u{27f3} ") && trimmed.ends_with("(...)") {
-            let rest = &trimmed[2..]; // after "⟳ "
-            out.push(Line::from(vec![
-                Span::styled(
-                    "   \u{27f3} ",
-                    Style::default().fg(ORANGE).add_modifier(Modifier::SLOW_BLINK),
-                ),
-                Span::styled(
-                    rest,
+        // Tool call completed: "  tool_name(args)" (no spinner)
+        if let Some((name, _args)) = trimmed.split_once('(') {
+            if trimmed.ends_with(')') && !name.contains(' ') && name.len() <= 20 {
+                out.push(Line::from(Span::styled(
+                    format!("   {}", trimmed),
                     Style::default().fg(CYAN).add_modifier(Modifier::DIM),
-                ),
-            ]));
-            continue;
-        }
-
-        // Tool call / error / warning patterns (higher priority than markdown)
-        if trimmed.ends_with("(...)") {
-            out.push(Line::from(Span::styled(
-                format!("   {}", trimmed),
-                Style::default().fg(CYAN).add_modifier(Modifier::DIM),
-            )));
-            continue;
+                )));
+                continue;
+            }
         }
         if trimmed.starts_with("Error:") || trimmed.starts_with("error:") {
             out.push(Line::from(Span::styled(
@@ -267,7 +267,7 @@ fn render_md(content: &str) -> Vec<Line<'_>> {
 
 fn parse_inline_md(line: &str, add_prefix: bool) -> Vec<Span<'_>> {
     let prefix = if add_prefix { "   " } else { "" };
-    let text = if add_prefix { line } else { line };
+    let text = line;
 
     let mut spans: Vec<Span<'_>> = Vec::new();
     let chars: Vec<char> = text.chars().collect();
@@ -432,32 +432,28 @@ pub fn approve(frame: &mut Frame, path: &str, diff: &str, preview_lines: usize) 
 }
 
 fn detect_diff(line: &str) -> Option<Line<'_>> {
-    if line.starts_with("   - ") {
-        let code = &line[5..];
+    if let Some(code) = line.strip_prefix("   - ") {
         let mut spans = vec![Span::styled(
             "   - ",
             Style::default().fg(RED),
         )];
         spans.extend(highlight_rust(code));
         Some(Line::from(spans))
-    } else if line.starts_with("   + ") {
-        let code = &line[5..];
+    } else if let Some(code) = line.strip_prefix("   + ") {
         let mut spans = vec![Span::styled(
             "   + ",
             Style::default().fg(GREEN),
         )];
         spans.extend(highlight_rust(code));
         Some(Line::from(spans))
-    } else if line.starts_with("   -") {
-        let code = &line[4..];
+    } else if let Some(code) = line.strip_prefix("   -") {
         let mut spans = vec![Span::styled(
             "   -",
             Style::default().fg(RED),
         )];
         spans.extend(highlight_rust(code));
         Some(Line::from(spans))
-    } else if line.starts_with("   +") {
-        let code = &line[4..];
+    } else if let Some(code) = line.strip_prefix("   +") {
         let mut spans = vec![Span::styled(
             "   +",
             Style::default().fg(GREEN),

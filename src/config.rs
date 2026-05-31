@@ -181,21 +181,18 @@ impl Config {
         let mut config = Config::default();
 
         // Layer 2: user config (~/.config/bytode.toml)
-        if let Some(user_path) = user_config_path() {
-            if user_path.exists() {
-                if let Some(raw) = Self::read_file(&user_path)? {
+        if let Some(user_path) = user_config_path()
+            && user_path.exists()
+                && let Some(raw) = Self::read_file(&user_path)? {
                     config.merge(raw);
                 }
-            }
-        }
 
         // Layer 3: project config (<root>/.bytode.toml)
         let project_config_path = project_root.join(".bytode.toml");
-        if project_config_path.exists() {
-            if let Some(raw) = Self::read_file(&project_config_path)? {
+        if project_config_path.exists()
+            && let Some(raw) = Self::read_file(&project_config_path)? {
                 config.merge(raw);
             }
-        }
 
         config.apply_hard_constraints();
         Ok(config)
@@ -213,9 +210,8 @@ impl Config {
     }
 
     fn merge(&mut self, raw: RawConfig) {
-        if let Some(p) = raw.project {
-            if let Some(lang) = p.lang { self.project_lang_override = Some(lang); }
-        }
+        if let Some(p) = raw.project
+            && let Some(lang) = p.lang { self.project_lang_override = Some(lang); }
         if let Some(b) = raw.build {
             self.build.extra_check_flags = b.extra_check_flags;
         }

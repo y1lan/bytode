@@ -167,7 +167,7 @@ impl ToolRegistry {
             let allowed = match &entry.availability {
                 ToolAvailability::Always => true,
                 ToolAvailability::PrimaryLanguage { requires } => {
-                    requires.iter().any(|l| *l == primary_language)
+                    requires.contains(&primary_language)
                 }
                 ToolAvailability::DetectedLanguage { languages } => languages
                     .iter()

@@ -1,9 +1,12 @@
+#![allow(dead_code)]
+
 mod agent;
 mod config;
 mod error;
 mod llm;
 mod lsp;
 mod project;
+mod repl;
 mod tools;
 mod ui;
 
@@ -30,7 +33,6 @@ use tools::{
     web::WebSearchTool,
     ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
 };
-use ui::{layout::UiState, statusbar::StatusBarState, Terminal};
 
 #[derive(Parser)]
 #[command(name = "bytode", about = "Terminal coding agent")]
@@ -230,368 +232,21 @@ async fn main() -> Result<()> {
             println!();
         }
         None => {
-            run_repl(
-                &mut agent,
+            agent = repl::run(
+                agent,
                 &profile,
                 git_branch,
                 git_dirty,
                 &detection_source,
                 chat_history_init,
             )
-            .await?;
+            .await;
         }
     };
 
-    let _ = agent.save_session(&session_file);
+    let _ = agent.save_session(&session_file, &project_root.to_string_lossy());
     lsp_client.shutdown().await;
     Ok(())
-}
-
-async fn run_repl(
-    agent: &mut Agent,
-    profile: &ProjectProfile,
-    git_branch: Option<String>,
-    git_dirty: bool,
-    detection_source: &str,
-    chat_history_init: Vec<String>,
-) -> Result<()> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-
-    let terminal = Arc::new(Mutex::new(Terminal::init()?));
-    let mut user_input = String::new();
-    let mut sidebar_visible = false;
-
-    let chat_history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(chat_history_init));
-    let scroll_offset: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-
-    loop {
-        let history = chat_history.lock().unwrap();
-        let offset = *scroll_offset.lock().unwrap();
-        let history_snapshot = history.clone();
-        drop(history);
-
-        let scroll_info = if offset > 0 {
-            format!(" [↑ {}]", offset)
-        } else {
-            String::new()
-        };
-
-        let state = UiState {
-            sidebar_visible,
-            tool_names: agent.tool_names(),
-            status: StatusBarState {
-                dir: std::env::current_dir()
-                    .map(|d| d.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                git_branch: git_branch.clone(),
-                git_dirty,
-                task: format!("idle{}", scroll_info),
-                model: agent.model_name().to_string(),
-                ctx_used: agent.context_used(),
-                ctx_total: agent.context_total(),
-                tool_count: agent.tool_names().len(),
-                session_cost: agent.session_cost(),
-                session_calls: agent.session_call_count(),
-                mode: mode_str(agent.mode()),
-            },
-            tool_result: None,
-            history: history_snapshot,
-            streaming: None,
-            scroll_offset: offset,
-            user_input: user_input.clone(),
-            approval: None,
-            primary_language: format!("{} [{}]", profile.primary, profile.build_system),
-            detection_source: detection_source.to_string(),
-        };
-
-        {
-            let mut t = terminal.lock().unwrap();
-            t.draw(|frame| ui::layout::render_ui(frame, &state))?;
-        }
-
-        if let Ok(event) = crossterm::event::read() {
-            match event {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => {
-                        let input = std::mem::take(&mut user_input);
-                        if input == "/exit" || input == "/quit" {
-                            break;
-                        }
-                        if input.starts_with("/model") {
-                            let parts: Vec<&str> = input.split_whitespace().collect();
-                            if parts.len() == 1 {
-                                let mut h = chat_history.lock().unwrap();
-                                h.push(format!("\u{25b8} {}", input));
-                                h.push(format!("Current model: {}", agent.model_name()));
-                                h.push(
-                                    "Usage: /model pro | /model flash".into(),
-                                );
-                            } else {
-                                let name = parts[1].to_lowercase();
-                                let model = match name.as_str() {
-                                    "pro" => "deepseek-v4-pro",
-                                    "flash" => "deepseek-v4-flash",
-                                    "deepseek-v4-pro" => "deepseek-v4-pro",
-                                    "deepseek-v4-flash" => "deepseek-v4-flash",
-                                    _ => {
-                                        let mut h = chat_history.lock().unwrap();
-                                        h.push(format!("\u{25b8} {}", input));
-                                        h.push(format!(
-                                            "Unknown model: {}. Use pro or flash.",
-                                            name
-                                        ));
-                                        continue;
-                                    }
-                                };
-                                agent.set_model(model.to_string());
-                                let mut h = chat_history.lock().unwrap();
-                                h.push(format!("\u{25b8} {}", input));
-                                h.push(format!("Switched to model: {}", model));
-                            }
-                            continue;
-                        }
-                        if input.starts_with("/plan") {
-                            let parts: Vec<&str> = input.split_whitespace().collect();
-                            let toggle = parts.get(1).map(|s| s.to_lowercase());
-                            let new_mode = match toggle.as_deref() {
-                                Some("on") | Some("enable") => Some(agent::AgentMode::Plan),
-                                Some("off") | Some("disable") => Some(agent::AgentMode::Normal),
-                                None | Some("toggle") => {
-                                    Some(if agent.mode() == agent::AgentMode::Plan {
-                                        agent::AgentMode::Normal
-                                    } else {
-                                        agent::AgentMode::Plan
-                                    })
-                                }
-                                _ => {
-                                    let mut h = chat_history.lock().unwrap();
-                                    h.push(format!("\u{25b8} {}", input));
-                                    h.push("Usage: /plan [on|off|toggle]".into());
-                                    continue;
-                                }
-                            };
-                            if let Some(mode) = new_mode {
-                                agent.set_mode(mode);
-                                let label = match mode {
-                                    agent::AgentMode::Plan => "plan (read-only)",
-                                    agent::AgentMode::Normal => "build",
-                                };
-                                let mut h = chat_history.lock().unwrap();
-                                h.push(format!("\u{25b8} {}", input));
-                                h.push(format!(
-                                    "Mode: {} | tools: {}",
-                                    label,
-                                    agent.tool_names().join(", ")
-                                ));
-                            }
-                            continue;
-                        }
-                        if input.is_empty() {
-                            continue;
-                        }
-
-                        // Add user message to history
-                        {
-                            let mut h = chat_history.lock().unwrap();
-                            h.push(format!("\u{25b8} {}", input));
-                        }
-                        *scroll_offset.lock().unwrap() = 0;
-
-                        // Show user message + thinking state immediately
-                        {
-                            let h = chat_history.lock().unwrap();
-                            let snapshot = h.clone();
-                            let mut t = terminal.lock().unwrap();
-                            let _ = t.draw(|frame| {
-                                let s = UiState {
-                                    sidebar_visible,
-                                    tool_names: agent.tool_names(),
-                                    status: StatusBarState {
-                                        dir: std::env::current_dir()
-                                            .map(|d| d.to_string_lossy().to_string())
-                                            .unwrap_or_default(),
-                                        git_branch: git_branch.clone(),
-                                        git_dirty,
-                                        task: "thinking...".into(),
-                                        model: agent.model_name().to_string(),
-                                        ctx_used: agent.context_used(),
-                                        ctx_total: agent.context_total(),
-                                        tool_count: agent.tool_names().len(),
-                                        session_cost: agent.session_cost(),
-                                        session_calls: agent.session_call_count(),
-                                        mode: mode_str(agent.mode()),
-                                    },
-                                    tool_result: None,
-                                    history: snapshot,
-                                    streaming: None,
-                                    scroll_offset: 0,
-                                    user_input: String::new(),
-                                    approval: None,
-                                    primary_language: format!(
-                                        "{} [{}]",
-                                        profile.primary, profile.build_system
-                                    ),
-                                    detection_source: detection_source.to_string(),
-                                };
-                                ui::layout::render_ui(frame, &s);
-                            });
-                        }
-
-                        let streaming_buf: Arc<Mutex<String>> =
-                            Arc::new(Mutex::new(String::new()));
-
-                        let terminal_clone = Arc::clone(&terminal);
-                        let history_clone = Arc::clone(&chat_history);
-                        let scroll_clone = Arc::clone(&scroll_offset);
-                        let streaming_clone = Arc::clone(&streaming_buf);
-                        let tool_names = agent.tool_names();
-                        let ctx_used = agent.context_used();
-                        let ctx_total = agent.context_total();
-                        let session_cost = agent.session_cost();
-                        let session_calls = agent.session_call_count();
-                        let primary_lang =
-                            format!("{} [{}]", profile.primary, profile.build_system);
-                        let ds = detection_source.to_string();
-                        let model_s = agent.model_name().to_string();
-                        let mode_s = mode_str(agent.mode());
-                        let dir_s = std::env::current_dir()
-                            .map(|d| d.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let gb = git_branch.clone();
-                        let current_tool: Arc<Mutex<String>> =
-                            Arc::new(Mutex::new(String::new()));
-                        let last_draw: Arc<Mutex<std::time::Instant>> =
-                            Arc::new(Mutex::new(std::time::Instant::now()));
-
-                        let result = agent
-                            .run_turn_streaming(&input, move |chunk| {
-                                streaming_clone.lock().unwrap().push_str(chunk);
-                                {
-                                    let trimmed = chunk.trim();
-                                    if trimmed.ends_with("(...)") {
-                                        let tool_name =
-                                            trimmed.trim_end_matches("(...)").trim();
-                                        *current_tool.lock().unwrap() =
-                                            tool_name.to_string();
-                                    }
-                                }
-                                *scroll_clone.lock().unwrap() = 0;
-
-                                let now = std::time::Instant::now();
-                                let too_soon = now
-                                    .duration_since(*last_draw.lock().unwrap())
-                                    .as_millis()
-                                    < 20;
-                                if too_soon {
-                                    return;
-                                }
-                                *last_draw.lock().unwrap() = now;
-
-                                if let Ok(mut t) = terminal_clone.lock() {
-                                    let h = history_clone.lock().unwrap();
-                                    let start = h.len().saturating_sub(10);
-                                    let snapshot: Vec<String> =
-                                        h.iter().skip(start).cloned().collect();
-                                    let streamed =
-                                        streaming_clone.lock().unwrap().clone();
-                                    let tool = current_tool.lock().unwrap().clone();
-                                    let task = if tool.is_empty() {
-                                        "thinking...".into()
-                                    } else {
-                                        format!("{}()...", tool)
-                                    };
-                                    let _ = t.draw(|frame| {
-                                        let s = UiState {
-                                            sidebar_visible,
-                                            tool_names: tool_names.clone(),
-                                            status: StatusBarState {
-                                                dir: dir_s.clone(),
-                                                git_branch: gb.clone(),
-                                                git_dirty,
-                                                task,
-                                                model: model_s.clone(),
-                                                ctx_used,
-                                                ctx_total,
-                                                tool_count: tool_names.len(),
-                                                session_cost,
-                                                session_calls,
-                                                mode: mode_s.clone(),
-                                            },
-                                            tool_result: None,
-                                            history: snapshot,
-                                            streaming: if streamed.is_empty() {
-                                                None
-                                            } else {
-                                                Some(streamed)
-                                            },
-                                            scroll_offset: 0,
-                                            user_input: String::new(),
-                                            approval: None,
-                                            primary_language: primary_lang.clone(),
-                                            detection_source: ds.clone(),
-                                        };
-                                        ui::layout::render_ui(frame, &s);
-                                    });
-                                }
-                            })
-                            .await;
-
-                        let final_text = streaming_buf.lock().unwrap().clone();
-                        let mut h = chat_history.lock().unwrap();
-                        match result {
-                            Ok(agent::AgentOutput::Text(_)) => {
-                                if !final_text.is_empty() {
-                                    h.push(final_text);
-                                }
-                            }
-                            Err(e) => {
-                                h.push(format!("Error: {}", e));
-                            }
-                        }
-                        *scroll_offset.lock().unwrap() = 0;
-                    }
-                    KeyCode::Char('t')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        sidebar_visible = !sidebar_visible;
-                    }
-                    KeyCode::Char('c')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        break;
-                    }
-                    KeyCode::Up | KeyCode::PageUp => {
-                        let mut off = scroll_offset.lock().unwrap();
-                        let step = if key.code == KeyCode::PageUp { 20 } else { 3 };
-                        *off = (*off + step).min(10_000);
-                    }
-                    KeyCode::Down | KeyCode::PageDown => {
-                        let mut off = scroll_offset.lock().unwrap();
-                        let step = if key.code == KeyCode::PageDown { 20 } else { 3 };
-                        *off = off.saturating_sub(step);
-                    }
-                    KeyCode::Char(c) => {
-                        user_input.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        user_input.pop();
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Terminal::restore()?;
-    Ok(())
-}
-
-fn mode_str(mode: agent::AgentMode) -> String {
-    match mode {
-        agent::AgentMode::Normal => "build".into(),
-        agent::AgentMode::Plan => "plan".into(),
-    }
 }
 
 fn get_git_branch(root: &Path) -> Option<String> {
@@ -600,11 +255,10 @@ fn get_git_branch(root: &Path) -> Option<String> {
 }
 
 fn is_git_dirty(root: &Path) -> bool {
-    if let Ok(repo) = git2::Repository::open(root) {
-        if let Ok(statuses) = repo.statuses(None) {
+    if let Ok(repo) = git2::Repository::open(root)
+        && let Ok(statuses) = repo.statuses(None) {
             return !statuses.is_empty();
         }
-    }
     false
 }
 
@@ -620,8 +274,7 @@ fn load_rust_analyzer_config(root: &Path) -> serde_json::Value {
     std::fs::read_to_string(&ra_toml)
         .ok()
         .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
-        .map(|v| serde_json::to_value(v).ok())
-        .flatten()
+        .and_then(|v| serde_json::to_value(v).ok())
         .unwrap_or_else(|| {
             serde_json::json!({
                 "rustc": { "source": "discover" },
@@ -631,18 +284,11 @@ fn load_rust_analyzer_config(root: &Path) -> serde_json::Value {
 }
 
 fn session_path(project_root: &Path, session_dir: &Path) -> PathBuf {
-    let safe: String = project_root
-        .to_string_lossy()
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    session_dir.join(format!("{}.json", safe))
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    project_root.to_string_lossy().hash(&mut hasher);
+    let hash = hasher.finish();
+    session_dir.join(format!("{:016x}.json", hash))
 }
 
 struct SessionEntry {
@@ -659,17 +305,33 @@ fn session_list(session_dir: &Path) -> Vec<SessionEntry> {
     for entry in dir.flatten() {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "json") {
-            let name = path
+            let hash = path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
+            let name = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| {
+                    v.get("project_path")
+                        .and_then(|p| p.as_str())
+                        .map(|p| {
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            p.replace(&home, "~")
+                        })
+                })
+                .unwrap_or_else(|| hash.clone());
             let turns = std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|v| v.get("turns").and_then(|t| t.as_array().map(|a| a.len())))
                 .unwrap_or(0);
-            entries.push(SessionEntry { name, path, turns });
+            entries.push(SessionEntry {
+                name,
+                path,
+                turns,
+            });
         }
     }
     entries.sort_by(|a, b| {

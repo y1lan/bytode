@@ -22,7 +22,7 @@ impl Terminal {
         Ok(Terminal { terminal })
     }
 
-    pub fn draw<F>(&mut self, f: F) -> io::Result<ratatui::CompletedFrame>
+    pub fn draw<F>(&mut self, f: F) -> io::Result<ratatui::CompletedFrame<'_>>
     where
         F: FnOnce(&mut Frame),
     {

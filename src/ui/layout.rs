@@ -1,7 +1,7 @@
 use crate::tools::ToolResult;
 use crate::ui::{render, statusbar};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 #[derive(Clone)]
 pub struct UiState {
@@ -60,7 +60,7 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
     if let Some(ref result) = state.tool_result {
         render::tool_result(frame, output_area, result);
     } else {
-        let mut y = output_area.y;
+        let _y = output_area.y;
 
         // Collect blocks with is_user flag
         let streaming = state.streaming.as_deref();
