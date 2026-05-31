@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentMode, AgentOutput};
+use crate::agent::{Agent, AgentMode};
 use crate::project::ProjectProfile;
 use crate::ui::{layout::UiState, statusbar::StatusBarState, Terminal};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};

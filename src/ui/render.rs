@@ -1,6 +1,6 @@
 use crate::tools::ToolResult;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 const TXT: Color = Color::Rgb(76, 79, 105);
 const TXT_SUBTLE: Color = Color::Rgb(108, 111, 133);
