@@ -112,7 +112,46 @@ async fn run_inner(
                         rx = None;
                         streaming = false;
                         let ft = std::mem::take(&mut stream_buf);
-                        if !ft.is_empty() { entries.lock().unwrap().push(HistoryEntry::Assistant(ft)); }
+                        if !ft.is_empty() {
+                            // Split stream_buf into assistant text segments and tool call segments
+                            let mut el = entries.lock().unwrap();
+                            let mut buf = String::new();
+                            let mut in_tool = false;
+                            let mut tool_text = String::new();
+                            for line in ft.lines() {
+                                if line.contains("\u{27f3} ") {
+                                    if in_tool && !tool_text.trim().is_empty() {
+                                        el.push(HistoryEntry::Tool { name: String::new(), summary: tool_text.trim().to_string() });
+                                    } else if !buf.trim().is_empty() {
+                                        el.push(HistoryEntry::Assistant(std::mem::take(&mut buf)));
+                                    }
+                                    in_tool = true;
+                                    let name = extract_tool_name(line);
+                                    tool_text.clear();
+                                    tool_text.push_str(&format!("{}(", name));
+                                    tool_text.push('\n');
+                                } else if in_tool {
+                                    if line.trim().is_empty() {
+                                        el.push(HistoryEntry::Tool { name: String::new(), summary: tool_text.trim().to_string() });
+                                        in_tool = false;
+                                        tool_text.clear();
+                                        buf.clear();
+                                    } else {
+                                        tool_text.push_str(line);
+                                        tool_text.push('\n');
+                                    }
+                                } else {
+                                    buf.push_str(line);
+                                    buf.push('\n');
+                                }
+                            }
+                            if in_tool && !tool_text.trim().is_empty() {
+                                el.push(HistoryEntry::Tool { name: String::new(), summary: tool_text.trim().to_string() });
+                            }
+                            if !buf.trim().is_empty() {
+                                el.push(HistoryEntry::Assistant(buf.trim().to_string()));
+                            }
+                        }
                         *show_stream_buf.lock().unwrap() = String::new();
                     }
                 }
@@ -276,4 +315,16 @@ async fn recv_stream(rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>) -> O
 
 async fn join_turn(h: &mut Option<tokio::task::JoinHandle<Agent>>) -> Option<Agent> {
     match h.as_mut() { Some(handle) => match handle.await { Ok(a) => Some(a), Err(_) => None }, None => std::future::pending().await }
+}
+
+fn extract_tool_name(line: &str) -> String {
+    // "  ⟳ read_file(src/main.rs)" -> "read_file"
+    line.split('\u{27f3}')
+        .nth(1)
+        .unwrap_or("")
+        .trim()
+        .split('(')
+        .next()
+        .unwrap_or("?")
+        .to_string()
 }
