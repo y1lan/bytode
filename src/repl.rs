@@ -147,7 +147,8 @@ async fn run_inner(
                                 }
                             } else {
                                 Terminal::restore().ok();
-                                return agent_opt.take().expect("agent missing");
+                                if let Some(a) = agent_opt.take() { return a; }
+                                std::process::exit(0);
                             }
                         }
                         KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => sidebar = !sidebar,
@@ -165,7 +166,8 @@ async fn run_inner(
                             let msg = std::mem::take(&mut input);
                             if msg == "/exit" || msg == "/quit" {
                                 Terminal::restore().ok();
-                                return agent_opt.take().expect("agent missing");
+                                if let Some(a) = agent_opt.take() { return a; }
+                                std::process::exit(0);
                             }
                             if let Some(ref mut a) = agent_opt {
                                 if handle_slash(a, &msg, &chat) { continue; }
