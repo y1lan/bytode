@@ -61,7 +61,7 @@ pub enum ToolResult {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct DiagnosticItem {
     pub file: String,
     pub line: u32,
@@ -71,7 +71,7 @@ pub struct DiagnosticItem {
     pub code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct MatchItem {
     pub file: String,
     pub line: u32,
@@ -82,8 +82,8 @@ pub struct MatchItem {
 #[derive(Debug, Clone)]
 pub enum ToolAvailability {
     Always,
-    PrimaryLanguage { requires: &'static [String] },
-    DetectedLanguage { languages: &'static [String] },
+    PrimaryLanguage { requires: &'static [&'static str] },
+    DetectedLanguage { languages: &'static [&'static str] },
 }
 
 #[async_trait]
@@ -160,11 +160,11 @@ impl ToolRegistry {
             let allowed = match &entry.availability {
                 ToolAvailability::Always => true,
                 ToolAvailability::PrimaryLanguage { requires } => {
-                    requires.iter().any(|l| l == primary_language)
+                    requires.iter().any(|l| *l == primary_language)
                 }
                 ToolAvailability::DetectedLanguage { languages } => languages
                     .iter()
-                    .any(|l| detected_languages.contains(l)),
+                    .any(|l| detected_languages.contains(*l)),
             };
 
             let user_added = enabled.contains(&name);
