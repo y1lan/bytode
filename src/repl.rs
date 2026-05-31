@@ -161,7 +161,15 @@ async fn run_inner(
             }
             result = join_turn(&mut turn_handle) => {
                 turn_handle = None;
-                if let Some(a) = result { agent_opt = Some(a); }
+                match result {
+                    Some(a) => agent_opt = Some(a),
+                    None => {
+                        entries.lock().unwrap().push(HistoryEntry::Error("Turn failed (task panicked)".into()));
+                        rx = None;
+                        streaming = false;
+                        *show_stream_buf.lock().unwrap() = String::new();
+                    }
+                }
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
             event = events.next() => {
@@ -221,7 +229,13 @@ async fn run_inner(
                             *show_stream_buf.lock().unwrap() = String::new();
                             streaming = true;
 
-                            let mut a = agent_opt.take().expect("agent already taken");
+                            let mut a = match agent_opt.take() {
+                                Some(a) => a,
+                                None => {
+                                    entries.lock().unwrap().push(HistoryEntry::Error("Agent unavailable".into()));
+                                    continue;
+                                }
+                            };
                             snap_tools = a.tool_names();
                             snap_model = a.model_name().to_string();
                             snap_mode = mode_str(a.mode());
