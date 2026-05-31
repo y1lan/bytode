@@ -11,6 +11,7 @@ pub struct Turn {
 
 #[derive(Debug, Clone)]
 pub struct ToolCallRecord {
+    pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
     pub result: ToolResult,
@@ -24,19 +25,6 @@ impl Turn {
             tool_calls: Vec::new(),
             user_intent: Some(user_input.to_string()),
         }
-    }
-
-    pub fn add_result(
-        &mut self,
-        name: String,
-        args: serde_json::Value,
-        result: ToolResult,
-    ) {
-        self.tool_calls.push(ToolCallRecord {
-            name,
-            arguments: args,
-            result,
-        });
     }
 }
 

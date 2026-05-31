@@ -41,7 +41,12 @@ impl Agent {
         }
     }
 
-    pub async fn run_turn(&mut self, user_input: &str) -> Result<AgentOutput> {
+    /// Run a turn with SSE streaming — `on_text` is called for each token chunk
+    pub async fn run_turn_streaming(
+        &mut self,
+        user_input: &str,
+        mut on_text: impl FnMut(&str),
+    ) -> Result<AgentOutput> {
         let turn = Turn::new(user_input);
         self.context.memory.add_turn(turn.clone());
 
@@ -49,7 +54,10 @@ impl Agent {
             let messages = self.context.build(&turn);
             let tools = self.registry.to_openai_format();
 
-            let response = self.llm.chat(messages, tools).await?;
+            let response = self
+                .llm
+                .chat_stream(messages, tools, &mut on_text)
+                .await?;
 
             match response {
                 LlmOutput::Text(text) => {
@@ -62,10 +70,14 @@ impl Agent {
                     let tool_name = call.name.clone();
                     let tool_args = call.arguments.clone();
 
+                    // Announce tool call in the stream
+                    on_text(&format!("\n🔧 {}(...)\n", tool_name));
+
                     let result = self.execute_tool(&call).await?;
 
                     if let Some(t) = self.context.memory.last_turn_mut() {
                         t.tool_calls.push(memory::ToolCallRecord {
+                            id: call.id.clone(),
                             name: tool_name,
                             arguments: tool_args,
                             result: result.clone(),
@@ -76,6 +88,11 @@ impl Agent {
                 }
             }
         }
+    }
+
+    /// Non-streaming fallback
+    pub async fn run_turn(&mut self, user_input: &str) -> Result<AgentOutput> {
+        self.run_turn_streaming(user_input, |_| {}).await
     }
 
     async fn execute_tool(&self, call: &ToolCall) -> Result<ToolResult> {

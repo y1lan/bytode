@@ -16,7 +16,7 @@ use lsp::{LspClient, LspConfig};
 use project::ProjectProfile;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tools::{
     check::CheckTool,
     file::{ReadFileTool, WriteFileTool},
@@ -29,18 +29,11 @@ use ui::{layout::UiState, statusbar::StatusBarState, Terminal};
 #[derive(Parser)]
 #[command(name = "bytode", about = "Terminal coding agent")]
 struct Cli {
-    /// One-shot task (runs and exits; omit for REPL)
     task: Option<String>,
-
-    /// Project root directory
     #[arg(short, long, default_value = ".")]
     project: PathBuf,
-
-    /// DeepSeek API key (or DEEPSEEK_API_KEY env var)
     #[arg(long)]
     api_key: Option<String>,
-
-    /// Model name
     #[arg(long, default_value = "deepseek-v4-pro")]
     model: String,
 }
@@ -55,39 +48,29 @@ async fn main() -> Result<()> {
         .init();
 
     let mut cli = Cli::parse();
-    // Resolve API key: CLI arg > env var
-    let api_key = cli.api_key.take()
+    let api_key = cli
+        .api_key
+        .take()
         .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
         .unwrap_or_else(|| {
-            eprintln!("Error: DEEPSEEK_API_KEY is required. Set via --api-key or DEEPSEEK_API_KEY env var.");
+            eprintln!("Error: DEEPSEEK_API_KEY is required.");
             std::process::exit(1);
         });
+
     let project_root = std::fs::canonicalize(&cli.project)?;
-
-    // 1. Load config
     let config = Config::load(&project_root)?;
-
-    // 2. Detect project
     let profile = ProjectProfile::detect(&project_root, &config)?;
-    tracing::info!("project: {} ({})", profile.primary, profile.build_system);
 
-    // 3. Load .rust-analyzer.toml for LSP options
     let lsp_options = load_rust_analyzer_config(&project_root);
-
-    // 4. Create LSP client
-    let lsp_config = LspConfig {
+    let lsp_client = Arc::new(LspClient::new(LspConfig {
         command: "rust-analyzer".into(),
         project_root: project_root.clone(),
         options: lsp_options,
-    };
-    let lsp_client = Arc::new(LspClient::new(lsp_config));
+    }));
 
-    // 5. Build tool registry
     let tools: Vec<ToolEntry> = vec![
         ToolEntry {
-            tool: Box::new(ReadFileTool {
-                project_root: project_root.clone(),
-            }),
+            tool: Box::new(ReadFileTool { project_root: project_root.clone() }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         },
@@ -111,28 +94,18 @@ async fn main() -> Result<()> {
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(CheckTool {
-                extra_args: config.build.extra_check_flags.clone(),
-            }),
+            tool: Box::new(CheckTool { extra_args: config.build.extra_check_flags.clone() }),
             category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage {
-                requires: &["rust"],
-            },
+            availability: ToolAvailability::PrimaryLanguage { requires: &["rust"] },
         },
         ToolEntry {
-            tool: Box::new(DiagnosticsTool {
-                lsp: lsp_client.clone(),
-            }),
+            tool: Box::new(DiagnosticsTool { lsp: lsp_client.clone() }),
             category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::DetectedLanguage {
-                languages: &["rust"],
-            },
+            availability: ToolAvailability::DetectedLanguage { languages: &["rust"] },
         },
     ];
 
     let registry = ToolRegistry::new(tools);
-
-    // 6. Extract tool selection from config
     let (enabled_set, disabled_set, is_exact) = match &config.tools {
         config::ToolSelection::Exact { enabled } => {
             (enabled.iter().cloned().collect(), HashSet::new(), true)
@@ -140,45 +113,38 @@ async fn main() -> Result<()> {
         config::ToolSelection::Additive { enable, disable } => {
             (enable.iter().cloned().collect(), disable.iter().cloned().collect(), false)
         }
-        config::ToolSelection::None => {
-            (HashSet::new(), HashSet::new(), false)
-        }
+        config::ToolSelection::None => (HashSet::new(), HashSet::new(), false),
     };
 
-    // 7. Create LLM client
     let llm = DeepSeekClient::new(api_key, cli.model.clone(), None)?;
-
-    // 8. Create agent
     let mut agent = Agent::new(llm, registry, &profile, &enabled_set, &disabled_set, is_exact);
-
-    // 9. Get git info for status bar
     let git_branch = get_git_branch(&project_root);
     let git_dirty = is_git_dirty(&project_root);
-
     let detection_source: String = if matches!(config.tools, config::ToolSelection::None) {
         "auto-detect".into()
     } else {
         ".bytode.toml".into()
     };
 
-    // 10. Run
-    let result = match cli.task {
+    match cli.task {
         Some(task) => {
-            println!("⏳ {}", task);
-            let output = agent.run_turn(&task).await?;
-            println!("{}", match output {
-                agent::AgentOutput::Text(t) => t,
-            });
-            Ok(())
+            eprintln!("⏳ {}", task);
+            agent
+                .run_turn_streaming(&task, |chunk| {
+                    print!("{}", chunk);
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                })
+                .await?;
+            println!();
         }
         None => {
-            run_repl(&mut agent, &cli.model, &profile, git_branch, git_dirty, &detection_source).await
+            run_repl(&mut agent, &cli.model, &profile, git_branch, git_dirty, &detection_source).await?;
         }
     };
 
-    // 11. Shutdown
     lsp_client.shutdown().await;
-    result
+    Ok(())
 }
 
 async fn run_repl(
@@ -189,15 +155,40 @@ async fn run_repl(
     git_dirty: bool,
     detection_source: &str,
 ) -> Result<()> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind};
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
-    let mut terminal = Terminal::init()?;
+    let terminal = Arc::new(Mutex::new(Terminal::init()?));
     let mut user_input = String::new();
     let mut sidebar_visible = false;
-    let mut last_output: Option<String> = None;
-    let mut last_tool_result: Option<tools::ToolResult> = None;
+
+    // Chat history: each String is one message block
+    let chat_history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let scroll_offset: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 
     loop {
+        // Build visible text from chat_history + current streaming + scroll offset
+        let history = chat_history.lock().unwrap();
+        let full_text = history.join("\n");
+        let total_lines = full_text.lines().count();
+        let offset = *scroll_offset.lock().unwrap();
+
+        // Visible portion: show from (total_lines - offset - visible_lines) to (total_lines - offset)
+        // offset 0 = show bottom (newest), offset > 0 = scrolled up
+        let visible_lines = 40usize; // approximate visible lines in output area
+        let visible_start = total_lines.saturating_sub(offset + visible_lines);
+        let visible_text: String = full_text
+            .lines()
+            .skip(visible_start)
+            .take(visible_lines + offset)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let scroll_info = if offset > 0 {
+            format!(" [↑ {}]", offset)
+        } else {
+            String::new()
+        };
+
         let state = UiState {
             sidebar_visible,
             tool_names: agent.tool_names(),
@@ -207,21 +198,26 @@ async fn run_repl(
                     .unwrap_or_default(),
                 git_branch: git_branch.clone(),
                 git_dirty,
-                task: if last_output.is_some() { "⏳ idle" } else { "⏳ idle" }.into(),
+                task: format!("idle{}", scroll_info),
                 model: model.to_string(),
                 ctx_used: agent.context_used(),
                 ctx_total: agent.context_total(),
                 tool_count: agent.tool_names().len(),
             },
-            tool_result: last_tool_result.clone(),
-            llm_output: last_output.clone(),
+            tool_result: None,
+            llm_output: if visible_text.is_empty() { None } else { Some(visible_text) },
             user_input: user_input.clone(),
             approval: None,
             primary_language: format!("{} [{}]", profile.primary, profile.build_system),
             detection_source: detection_source.to_string(),
         };
 
-        terminal.draw(|frame| ui::layout::render_ui(frame, &state))?;
+        drop(history);
+
+        {
+            let mut t = terminal.lock().unwrap();
+            t.draw(|frame| ui::layout::render_ui(frame, &state))?;
+        }
 
         if let Ok(event) = crossterm::event::read() {
             match event {
@@ -232,36 +228,116 @@ async fn run_repl(
                             continue;
                         }
 
-                        let mut status_state = state.status.clone();
-                        status_state.task = "🔍 thinking...".into();
+                        // Add user message to history
+                        {
+                            let mut h = chat_history.lock().unwrap();
+                            h.push(format!("▸ {}", input));
+                        }
+                        // Reset scroll to bottom
+                        *scroll_offset.lock().unwrap() = 0;
 
-                        terminal.draw(|frame| {
-                            let s = UiState {
-                                status: status_state,
-                                ..state.clone()
-                            };
-                            ui::layout::render_ui(frame, &s);
-                        })?;
+                        // Start collecting streaming response
+                        let streaming_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
-                        match agent.run_turn(&input).await {
-                            Ok(agent::AgentOutput::Text(t)) => {
-                                last_output = Some(t);
-                                last_tool_result = None;
+                        // Capture state for the streaming callback
+                        let terminal_clone = Arc::clone(&terminal);
+                        let history_clone = Arc::clone(&chat_history);
+                        let scroll_clone = Arc::clone(&scroll_offset);
+                        let streaming_clone = Arc::clone(&streaming_buf);
+                        let tool_names = agent.tool_names();
+                        let ctx_used = agent.context_used();
+                        let ctx_total = agent.context_total();
+                        let primary_lang =
+                            format!("{} [{}]", profile.primary, profile.build_system);
+                        let ds = detection_source.to_string();
+                        let model_s = model.to_string();
+                        let dir_s = std::env::current_dir()
+                            .map(|d| d.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let gb = git_branch.clone();
+
+                        let result = agent
+                            .run_turn_streaming(&input, move |chunk| {
+                                streaming_clone.lock().unwrap().push_str(chunk);
+                                // Keep scroll at bottom during active streaming
+                                *scroll_clone.lock().unwrap() = 0;
+                                if let Ok(mut t) = terminal_clone.lock() {
+                                    let h = history_clone.lock().unwrap();
+                                    let full = h.join("\n");
+                                    let streamed = streaming_clone.lock().unwrap().clone();
+                                    let display = if streamed.is_empty() {
+                                        full
+                                    } else {
+                                        format!("{}\n{}", full, streamed)
+                                    };
+                                    let _ = t.draw(|frame| {
+                                        let s = UiState {
+                                            sidebar_visible,
+                                            tool_names: tool_names.clone(),
+                                            status: StatusBarState {
+                                                dir: dir_s.clone(),
+                                                git_branch: gb.clone(),
+                                                git_dirty,
+                                                task: "thinking...".into(),
+                                                model: model_s.clone(),
+                                                ctx_used,
+                                                ctx_total,
+                                                tool_count: tool_names.len(),
+                                            },
+                                            tool_result: None,
+                                            llm_output: Some(display),
+                                            user_input: String::new(),
+                                            approval: None,
+                                            primary_language: primary_lang.clone(),
+                                            detection_source: ds.clone(),
+                                        };
+                                        ui::layout::render_ui(frame, &s);
+                                    });
+                                }
+                            })
+                            .await;
+
+                        // Add assistant response to history, clear streaming buffer
+                        let final_text = streaming_buf.lock().unwrap().clone();
+                        let mut h = chat_history.lock().unwrap();
+                        match result {
+                            Ok(agent::AgentOutput::Text(_)) => {
+                                if !final_text.is_empty() {
+                                    h.push(final_text);
+                                }
                             }
                             Err(e) => {
-                                last_output = Some(format!("Error: {}", e));
-                                last_tool_result = None;
+                                h.push(format!("Error: {}", e));
                             }
                         }
+                        *scroll_offset.lock().unwrap() = 0;
                     }
-                    KeyCode::Char('t') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    KeyCode::Char('t')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
                         sidebar_visible = !sidebar_visible;
                     }
-                    KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    KeyCode::Char('c')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
                         break;
+                    }
+                    // Scroll up/down through history
+                    KeyCode::Up | KeyCode::PageUp => {
+                        let mut off = scroll_offset.lock().unwrap();
+                        let step = if key.code == KeyCode::PageUp { 20 } else { 3 };
+                        *off = (*off + step).min(10_000); // cap, will be clamped by render
+                    }
+                    KeyCode::Down | KeyCode::PageDown => {
+                        let mut off = scroll_offset.lock().unwrap();
+                        let step = if key.code == KeyCode::PageDown { 20 } else { 3 };
+                        *off = off.saturating_sub(step);
                     }
                     KeyCode::Char(c) => {
                         user_input.push(c);
+                        if user_input == "/exit" || user_input == "/quit" {
+                            break;
+                        }
                     }
                     KeyCode::Backspace => {
                         user_input.pop();

@@ -9,6 +9,7 @@ use async_openai::{
     },
     Client,
 };
+use futures::StreamExt;
 use serde_json::Value;
 
 pub struct DeepSeekClient {
@@ -51,12 +52,14 @@ impl DeepSeekClient {
         })
     }
 
-    pub async fn chat(
+    /// Streaming chat: calls `on_text` for each text chunk as it arrives.
+    /// Returns the final LlmOutput (either the full text or an accumulated ToolCall).
+    pub async fn chat_stream(
         &self,
         messages: Vec<ChatCompletionRequestMessage>,
         tools: Vec<Value>,
+        mut on_text: impl FnMut(&str),
     ) -> Result<LlmOutput> {
-        // Convert Vec<Value> to Vec<ChatCompletionTool> via serde
         let tools_serialized = serde_json::to_value(&tools).unwrap_or_default();
         let openai_tools: Vec<async_openai::types::ChatCompletionTool> =
             serde_json::from_value(tools_serialized).unwrap_or_default();
@@ -70,38 +73,76 @@ impl DeepSeekClient {
             .build()
             .map_err(|e| BytodeError::Llm(format!("build request: {}", e)))?;
 
-        let response = self
+        let mut stream = self
             .client
             .chat()
-            .create(request)
+            .create_stream(request)
             .await
-            .map_err(|e| BytodeError::Llm(format!("API error: {}", e)))?;
+            .map_err(|e| BytodeError::Llm(format!("stream error: {}", e)))?;
 
-        let choice = response
-            .choices
-            .first()
-            .ok_or_else(|| BytodeError::Llm("no choices in response".into()))?;
+        let mut full_text = String::new();
+        let mut tool_call_id = String::new();
+        let mut tool_call_name = String::new();
+        let mut tool_call_args = String::new();
 
-        let message = &choice.message;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| BytodeError::Llm(format!("chunk error: {}", e)))?;
 
-        if let Some(tool_calls) = &message.tool_calls {
-            if let Some(tc) = tool_calls.first() {
-                let id = tc.id.clone();
-                let name = tc.function.name.clone();
-                let arguments: Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+            for choice in &chunk.choices {
+                // Text delta
+                if let Some(ref content) = choice.delta.content {
+                    on_text(content);
+                    full_text.push_str(content);
+                }
 
-                return Ok(LlmOutput::ToolCall(ToolCall {
-                    id,
-                    name,
-                    arguments,
-                }));
+                // Tool call delta (accumulate across chunks)
+                if let Some(ref tc_deltas) = choice.delta.tool_calls {
+                    for tc in tc_deltas {
+                        if let Some(ref id) = tc.id {
+                            tool_call_id = id.clone();
+                        }
+                        if let Some(ref func) = tc.function {
+                            if let Some(ref name) = func.name {
+                                tool_call_name = name.clone();
+                            }
+                            if let Some(ref args) = func.arguments {
+                                tool_call_args.push_str(args);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        Ok(LlmOutput::Text(
-            message.content.clone().unwrap_or_default(),
-        ))
+        // If we accumulated a tool call, return it
+        if !tool_call_name.is_empty() {
+            let arguments: Value = if tool_call_args.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_str(&tool_call_args).unwrap_or(Value::Null)
+            };
+
+            return Ok(LlmOutput::ToolCall(ToolCall {
+                id: tool_call_id,
+                name: tool_call_name,
+                arguments,
+            }));
+        }
+
+        Ok(LlmOutput::Text(full_text))
+    }
+
+    /// Non-streaming fallback (for when we don't need real-time output)
+    pub async fn chat(
+        &self,
+        messages: Vec<ChatCompletionRequestMessage>,
+        tools: Vec<Value>,
+    ) -> Result<LlmOutput> {
+        let mut text = String::new();
+        self.chat_stream(messages, tools, |chunk| {
+            text.push_str(chunk);
+        })
+        .await
     }
 }
 

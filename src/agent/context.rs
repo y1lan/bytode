@@ -50,8 +50,16 @@ impl ContextBuilder {
                 let _ = text;
             }
             for record in &t.tool_calls {
+                // Must emit assistant tool_calls before the tool result
+                let assistant_tc = llm::ToolCall {
+                    id: record.id.clone(),
+                    name: record.name.clone(),
+                    arguments: record.arguments.clone(),
+                };
+                messages.push(llm::build_assistant_tool_call_message(&assistant_tc));
+
                 let result_text = format_tool_result(&record.result);
-                messages.push(llm::build_tool_result_message(&result_text, &record.name));
+                messages.push(llm::build_tool_result_message(&result_text, &record.id));
             }
         }
 

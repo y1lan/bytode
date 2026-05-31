@@ -1,7 +1,7 @@
 use crate::tools::ToolResult;
 use crate::ui::{render, statusbar};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 #[derive(Clone)]
 pub struct UiState {
@@ -19,28 +19,27 @@ pub struct UiState {
 pub fn render_ui(frame: &mut Frame, state: &UiState) {
     let main_area = frame.area();
 
+    // White background fills the entire terminal
+    let bg = Block::default().style(Style::default().bg(Color::White));
+    frame.render_widget(bg, main_area);
+
     let (content_area, sidebar_area) = if state.sidebar_visible {
-        let chunks = Layout::horizontal([
-            Constraint::Min(40),
-            Constraint::Length(24),
-        ])
-        .split(main_area);
+        let chunks = Layout::horizontal([Constraint::Min(40), Constraint::Length(24)])
+            .split(main_area);
         (chunks[0], Some(chunks[1]))
     } else {
         (main_area, None)
     };
 
-    let [scroll_area, status_area] = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .areas(content_area);
+    let [scroll_area, status_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(content_area);
 
-    let [output_area, input_area] = Layout::vertical([
-        Constraint::Min(4),
-        Constraint::Length(1),
-    ])
-    .areas(scroll_area);
+    let [output_area, input_area] =
+        Layout::vertical([Constraint::Min(4), Constraint::Length(1)]).areas(scroll_area);
+
+    // Content area also white
+    let content_bg = Block::default().style(Style::default().bg(Color::White));
+    frame.render_widget(content_bg, scroll_area);
 
     if let Some(ref result) = state.tool_result {
         render::tool_result(frame, output_area, result);
@@ -63,39 +62,61 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
 fn render_sidebar(frame: &mut Frame, area: Rect, state: &UiState) {
     let mut lines = vec![
         Line::from(Span::styled(
-            "Tools",
-            Style::default().add_modifier(Modifier::BOLD),
+            " Tools",
+            Style::default()
+                .fg(Color::Rgb(30, 30, 130))
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
 
     for name in &state.tool_names {
-        let icon = match name.as_str() {
-            "read_file" => "📖",
-            "write_file" => "✏️",
-            "search_code" => "🔍",
-            "run_check" => "🔧",
-            "get_diagnostics" => "💉",
-            _ => "•",
+        let (icon, color) = match name.as_str() {
+            "read_file" => ("📖", Color::Rgb(0, 120, 0)),
+            "write_file" => ("✏️", Color::Rgb(180, 120, 0)),
+            "search_code" => ("🔍", Color::Rgb(0, 80, 180)),
+            "run_check" => ("🔧", Color::Rgb(150, 0, 150)),
+            "get_diagnostics" => ("💉", Color::Rgb(180, 40, 40)),
+            _ => ("•", Color::Gray),
         };
-        lines.push(Line::from(format!(" {} {}", icon, name)));
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} ", icon), Style::default()),
+            Span::styled(name, Style::default().fg(color)),
+        ]));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "─".repeat(22),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Rgb(200, 200, 210)),
     )));
-    lines.push(Line::from(format!(" L: {}", state.primary_language)));
-    lines.push(Line::from(format!(" D: {}", state.detection_source)));
+    lines.push(Line::from(vec![
+        Span::styled(" L: ", Style::default().fg(Color::Rgb(140, 140, 150))),
+        Span::styled(
+            &state.primary_language,
+            Style::default().fg(Color::Rgb(50, 50, 60)),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" D: ", Style::default().fg(Color::Rgb(140, 140, 150))),
+        Span::styled(
+            &state.detection_source,
+            Style::default().fg(Color::Rgb(100, 100, 110)),
+        ),
+    ]));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         " ctrl+t toggle",
-        Style::default().fg(Color::Gray),
+        Style::default().fg(Color::Rgb(180, 180, 190)),
     )));
 
     let paragraph = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::LEFT))
+        .block(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(Style::default().fg(Color::Rgb(220, 220, 230)))
+                .style(Style::default().bg(Color::White)),
+        )
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
