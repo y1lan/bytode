@@ -1,6 +1,7 @@
-use crate::agent::{Agent, AgentMode};
+use crate::agent::{Agent, AgentMode, AgentOutput};
 use crate::project::ProjectProfile;
-use crate::ui::{layout::UiState, statusbar::StatusBarState, Terminal};
+use crate::ui::layout::{HistoryEntry, ScrollMode, UiState};
+use crate::ui::{statusbar::StatusBarState, Terminal};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use futures::{FutureExt, StreamExt};
 use std::sync::atomic::Ordering;
@@ -8,47 +9,41 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 pub async fn run(
-    agent: Agent,
-    profile: &ProjectProfile,
-    git_branch: Option<String>,
-    git_dirty: bool,
-    detection_source: &str,
-    chat_history_init: Vec<String>,
+    agent: Agent, profile: &ProjectProfile,
+    git_branch: Option<String>, git_dirty: bool,
+    detection_source: &str, chat: Vec<String>,
 ) -> Agent {
-    std::panic::AssertUnwindSafe(run_inner(
-        agent, profile, git_branch, git_dirty, detection_source, chat_history_init,
-    ))
-    .catch_unwind()
-    .await
-    .unwrap_or_else(|_| {
-        Terminal::restore().ok();
-        eprintln!("bytode panicked, terminal restored");
-        std::process::exit(1);
-    })
+    std::panic::AssertUnwindSafe(run_inner(agent, profile, git_branch, git_dirty, detection_source, chat))
+        .catch_unwind().await.unwrap_or_else(|_| {
+            Terminal::restore().ok();
+            eprintln!("bytode panicked, terminal restored");
+            std::process::exit(1);
+        })
 }
 
-enum StreamEvent {
-    Chunk(String),
-    Tool(String),
-}
+enum StreamEvent { Chunk(String), Tool(String) }
 
 async fn run_inner(
-    agent: Agent,
-    profile: &ProjectProfile,
-    git_branch: Option<String>,
-    git_dirty: bool,
-    detection_source: &str,
-    chat_history_init: Vec<String>,
+    agent: Agent, profile: &ProjectProfile,
+    git_branch: Option<String>, git_dirty: bool,
+    detection_source: &str, chat_history_init: Vec<String>,
 ) -> Agent {
     let mut agent_opt = Some(agent);
 
     let terminal = Arc::new(Mutex::new(Terminal::init().expect("terminal")));
-    let chat: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(chat_history_init));
-    let scroll = Arc::new(Mutex::new(0usize));
+    let entries: Vec<HistoryEntry> = chat_history_init.into_iter().map(|s| {
+        if s.starts_with('\u{25b8}') {
+            HistoryEntry::User(s.trim_start_matches('\u{25b8}').trim().to_string())
+        } else {
+            HistoryEntry::Assistant(s)
+        }
+    }).collect();
+    let entries = Arc::new(Mutex::new(entries));
 
     let mut input = String::new();
     let mut sidebar = false;
     let mut streaming = false;
+    let mut scroll = ScrollMode::Auto;
     let mut snap_model = String::new();
     let mut snap_mode = String::new();
     let mut snap_tools: Vec<String> = vec![];
@@ -63,10 +58,7 @@ async fn run_inner(
 
     {
         let cancel = agent_opt.as_ref().expect("agent missing").cancel_token();
-        tokio::spawn(async move {
-            tokio::signal::ctrl_c().await.ok();
-            cancel.store(true, Ordering::Relaxed);
-        });
+        tokio::spawn(async move { tokio::signal::ctrl_c().await.ok(); cancel.store(true, Ordering::Relaxed); });
     }
 
     let mut events = crossterm::event::EventStream::new();
@@ -93,58 +85,50 @@ async fn run_inner(
                     task: if streaming { "thinking...".into() } else { "idle".into() },
                     model: model.clone(), ctx_used: cu, ctx_total: ct,
                     tool_count: tn.len(), session_cost: cost, session_calls: calls,
-                    mode: mode.clone(), elapsed: elapsed_fmt(last_msg),
-                    spinner: spinner_char(),
+                    mode: mode.clone(), elapsed: elapsed_fmt(last_msg), spinner: spinner_char(),
                 },
                 tool_result: None,
-                history: chat.lock().unwrap().clone(),
+                entries: entries.lock().unwrap().clone(),
                 streaming: if streaming { Some(show_stream_buf.lock().unwrap().clone()) } else { None },
-                scroll_offset: *scroll.lock().unwrap(),
+                scroll,
                 user_input: input.clone(),
                 approval: None,
                 primary_language: pl.clone(),
                 detection_source: ds.clone(),
             };
-            if let Ok(mut t) = terminal.lock() {
-                let _ = t.draw(|frame| crate::ui::layout::render_ui(frame, &st));
-            }
+            if let Ok(mut t) = terminal.lock() { let _ = t.draw(|f| crate::ui::layout::render_ui(f, &st)); }
         }
 
         tokio::select! {
             biased;
-
             msg = recv_stream(&mut rx) => {
                 match msg {
                     Some(StreamEvent::Chunk(text)) => {
                         stream_buf.push_str(&text);
                         *show_stream_buf.lock().unwrap() = stream_buf.clone();
                     }
-                    Some(StreamEvent::Tool(_name)) => {}
+                    Some(StreamEvent::Tool(_)) => {}
                     None => {
                         rx = None;
                         streaming = false;
                         let ft = std::mem::take(&mut stream_buf);
-                        if !ft.is_empty() { chat.lock().unwrap().push(ft); }
+                        if !ft.is_empty() { entries.lock().unwrap().push(HistoryEntry::Assistant(ft)); }
                         *show_stream_buf.lock().unwrap() = String::new();
-                        *scroll.lock().unwrap() = 0;
                     }
                 }
             }
-
             result = join_turn(&mut turn_handle) => {
                 turn_handle = None;
                 if let Some(a) = result { agent_opt = Some(a); }
             }
-
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
             event = events.next() => {
                 let Some(Ok(ev)) = event else { continue };
                 match ev {
                     Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             if streaming {
-                                if let Some(ref a) = agent_opt {
-                                    a.cancel_token().store(true, Ordering::Relaxed);
-                                }
+                                if let Some(ref a) = agent_opt { a.cancel_token().store(true, Ordering::Relaxed); }
                             } else {
                                 Terminal::restore().ok();
                                 if let Some(a) = agent_opt.take() { return a; }
@@ -153,12 +137,21 @@ async fn run_inner(
                         }
                         KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => sidebar = !sidebar,
                         KeyCode::Up | KeyCode::PageUp => {
-                            let mut off = scroll.lock().unwrap();
-                            *off = (*off + if k.code == KeyCode::PageUp { 20 } else { 5 }).min(100_000);
+                            let step = if k.code == KeyCode::PageUp { 20 } else { 5 };
+                            match scroll {
+                                ScrollMode::Auto => scroll = ScrollMode::Manual(step),
+                                ScrollMode::Manual(n) => scroll = ScrollMode::Manual(n.saturating_add(step).min(100_000)),
+                            }
                         }
                         KeyCode::Down | KeyCode::PageDown => {
-                            let mut off = scroll.lock().unwrap();
-                            *off = off.saturating_sub(if k.code == KeyCode::PageDown { 20 } else { 5 });
+                            let step = if k.code == KeyCode::PageDown { 20 } else { 5 };
+                            match scroll {
+                                ScrollMode::Auto => {}
+                                ScrollMode::Manual(n) => {
+                                    let n2 = n.saturating_sub(step);
+                                    scroll = if n2 == 0 { ScrollMode::Auto } else { ScrollMode::Manual(n2) };
+                                }
+                            }
                         }
                         KeyCode::Char(c) => input.push(c),
                         KeyCode::Backspace => { input.pop(); }
@@ -170,13 +163,13 @@ async fn run_inner(
                                 std::process::exit(0);
                             }
                             if let Some(ref mut a) = agent_opt {
-                                if handle_slash(a, &msg, &chat) { continue; }
+                                if handle_slash(a, &msg, &entries) { continue; }
                             }
                             if msg.is_empty() || streaming { continue; }
 
                             last_msg = Some(std::time::Instant::now());
-                            chat.lock().unwrap().push(format!("\u{25b8} {msg}"));
-                            *scroll.lock().unwrap() = 0;
+                            entries.lock().unwrap().push(HistoryEntry::User(msg.clone()));
+                            scroll = ScrollMode::Auto;
                             stream_buf.clear();
                             *show_stream_buf.lock().unwrap() = String::new();
                             streaming = true;
@@ -186,11 +179,11 @@ async fn run_inner(
                             snap_model = a.model_name().to_string();
                             snap_mode = mode_str(a.mode());
 
+                            let entries2 = Arc::clone(&entries);
                             let (tx, new_rx) = mpsc::unbounded_channel();
                             let tx2 = tx.clone();
                             rx = Some(new_rx);
 
-                            let chat2 = Arc::clone(&chat);
                             let handle = tokio::spawn(async move {
                                 let res = a.run_turn_streaming(&msg, move |chunk| {
                                     let trimmed = chunk.trim();
@@ -203,14 +196,11 @@ async fn run_inner(
                                 }).await;
                                 drop(tx);
                                 match res {
-                                    Err(e) => {
-                                        chat2.lock().unwrap().push(format!("Error: {e}"));
-                                    }
+                                    Err(e) => { entries2.lock().unwrap().push(HistoryEntry::Error(format!("Error: {e}"))); }
                                     _ => {}
                                 }
                                 a
                             });
-
                             turn_handle = Some(handle);
                         }
                         _ => {}
@@ -222,38 +212,38 @@ async fn run_inner(
     }
 }
 
-fn handle_slash(agent: &mut Agent, input: &str, chat: &Arc<Mutex<Vec<String>>>) -> bool {
-    let mut h = chat.lock().unwrap();
+fn handle_slash(agent: &mut Agent, input: &str, entries: &Arc<Mutex<Vec<HistoryEntry>>>) -> bool {
+    let mut h = entries.lock().unwrap();
     if input.starts_with("/model") {
-        h.push(format!("\u{25b8} {input}"));
+        h.push(HistoryEntry::User(input.to_string()));
         let parts: Vec<&str> = input.split_whitespace().collect();
         if parts.len() == 1 {
-            h.push(format!("Current model: {}", agent.model_name()));
-            h.push("Usage: /model pro | /model flash".to_string());
+            h.push(HistoryEntry::Assistant(format!("Current model: {}", agent.model_name())));
+            h.push(HistoryEntry::Assistant("Usage: /model pro | /model flash".to_string()));
         } else {
             let model = match parts[1].to_lowercase().as_str() {
                 "pro" | "deepseek-v4-pro" => "deepseek-v4-pro",
                 "flash" | "deepseek-v4-flash" => "deepseek-v4-flash",
-                name => { h.push(format!("Unknown model: {name}")); return true; }
+                name => { h.push(HistoryEntry::Error(format!("Unknown model: {name}"))); return true; }
             };
             agent.set_model(model.to_string());
-            h.push(format!("Switched to model: {model}"));
+            h.push(HistoryEntry::Assistant(format!("Switched to model: {model}")));
         }
         return true;
     }
     if input.starts_with("/plan") {
-        h.push(format!("\u{25b8} {input}"));
+        h.push(HistoryEntry::User(input.to_string()));
         let toggle = input.split_whitespace().nth(1).map(|s| s.to_lowercase());
-        let new_mode = match toggle.as_deref() {
+        let m = match toggle.as_deref() {
             Some("on") | Some("enable") => Some(AgentMode::Plan),
             Some("off") | Some("disable") => Some(AgentMode::Normal),
             None | Some("toggle") => Some(if agent.mode() == AgentMode::Plan { AgentMode::Normal } else { AgentMode::Plan }),
             _ => None,
         };
-        if let Some(mode) = new_mode {
+        if let Some(mode) = m {
             agent.set_mode(mode);
             let label = match mode { AgentMode::Plan => "plan", AgentMode::Normal => "build" };
-            h.push(format!("Mode: {label} | tools: {}", agent.tool_names().join(", ")));
+            h.push(HistoryEntry::Assistant(format!("Mode: {label} | tools: {}", agent.tool_names().join(", "))));
         }
         return true;
     }
@@ -268,33 +258,22 @@ fn elapsed_fmt(since: Option<std::time::Instant>) -> String {
     match since {
         Some(t) => {
             let ms = t.elapsed().as_millis();
-            if ms < 1000 { format!("{ms}ms") }
-            else if ms < 60_000 { format!("{:.1}s", ms as f64 / 1000.0) }
-            else { format!("{}m{}s", ms / 60000, (ms % 60000) / 1000) }
+            if ms < 1000 { format!("{ms}ms") } else if ms < 60_000 { format!("{:.1}s", ms as f64/1000.0) } else { format!("{}m{}s", ms/60000, (ms%60000)/1000) }
         }
         None => "0ms".into(),
     }
 }
 
 fn spinner_char() -> char {
-    const SPIN: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let idx = (now.as_millis() / 100) as usize % SPIN.len();
-    SPIN[idx]
+    const S: &[char] = &['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+    S[(ms / 100) as usize % S.len()]
 }
 
 async fn recv_stream(rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>) -> Option<StreamEvent> {
-    match rx.as_mut() {
-        Some(r) => r.recv().await,
-        None => std::future::pending().await,
-    }
+    match rx.as_mut() { Some(r) => r.recv().await, None => std::future::pending().await }
 }
 
 async fn join_turn(h: &mut Option<tokio::task::JoinHandle<Agent>>) -> Option<Agent> {
-    match h.as_mut() {
-        Some(handle) => match handle.await { Ok(a) => Some(a), Err(_) => None },
-        None => std::future::pending().await,
-    }
+    match h.as_mut() { Some(handle) => match handle.await { Ok(a) => Some(a), Err(_) => None }, None => std::future::pending().await }
 }
