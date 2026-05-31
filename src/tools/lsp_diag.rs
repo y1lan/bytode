@@ -17,19 +17,24 @@ impl Tool for DiagnosticsTool {
     }
 
     fn description(&self) -> &'static str {
-        r#"Get structured diagnostics from rust-analyzer.
+        r#"Get structured diagnostics from rust-analyzer's live cache.
 
-WHEN TO USE: After a compile failure. Before reading any file to fix errors.
-This is the ONLY source of diagnostics — do not grep error logs or build output.
-WHEN NOT TO USE: For finding code patterns → use search_code. For reading code → use read_file.
+WHEN TO USE (mandatory):
+1. After calling cargo_check — if cargo_check shows errors, call get_diagnostics() WITHOUT path to get ALL errors.
+2. Before fixing any error — call get_diagnostics() or get_diagnostics(filter="errors") to see what to fix.
+3. After write_file — diagnostics refresh automatically, call get_diagnostics() to verify.
 
-Diagnostics are cached from rust-analyzer's publishDiagnostics push.
-Accepts an optional `filter` argument for precise extraction:
-  "errors" → errors only
-  "warnings" → warnings only
-  "length" → count of diagnostics
+HOW TO CALL:
+- get_diagnostics()                        → ALL diagnostics for the project (most common)
+- get_diagnostics(path="src/main.rs")     → diagnostics for a specific RS file
+- get_diagnostics(filter="errors")        → errors only
+- get_diagnostics(filter="length")        → count of diagnostics (0 = clean!)
 
-RETURNS: { "type": "diagnostics", tool, total, errors, warnings, list: [...] }"#
+DO NOT:
+- grep error logs or cargo_check output — get_diagnostics is the ONLY authorized source
+- pass Cargo.toml or directory paths — only .rs files
+
+RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings, list: [{file, line, column, severity, message, code}] }"#
     }
 
     fn parameters_schema(&self) -> Value {
@@ -38,7 +43,7 @@ RETURNS: { "type": "diagnostics", tool, total, errors, warnings, list: [...] }"#
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Filter diagnostics for this file only. Omit for all files.",
+                    "description": "A .rs source file path to filter diagnostics for. OMIT to get ALL project diagnostics. Do NOT pass directories or Cargo.toml.",
                     "nullable": true
                 },
                 "filter": {
