@@ -4,15 +4,15 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
-pub struct WebSearchTool {
+pub struct SearchWebTool {
     pub timeout_secs: u64,
     pub proxy: Option<String>,
 }
 
 #[async_trait]
-impl Tool for WebSearchTool {
+impl Tool for SearchWebTool {
     fn name(&self) -> &'static str {
-        "web_search"
+        "search_web"
     }
 
     fn description(&self) -> &'static str {
@@ -25,9 +25,9 @@ WHEN NOT TO USE: For local code questions — use search_code or read_file.
 For compiler errors — use get_diagnostics or run_cargo(cmd="check").
 
 EXAMPLES:
-  web_search(query="tokio::sync::Mutex example")     # search for tokio usage
-  web_search(query="rust async trait Send bound")    # search for rust concepts
-  web_search(query="reqwest 0.12 breaking changes")  # search for library docs
+  search_web(query="tokio::sync::Mutex example")     # search for tokio usage
+  search_web(query="rust async trait Send bound")    # search for rust concepts
+  search_web(query="reqwest 0.12 breaking changes")  # search for library docs
 
 RETURNS: Title, URL, and snippet for each result (up to 10)."#
     }
@@ -52,14 +52,14 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let query = args["query"].as_str().ok_or_else(|| BytodeError::Tool {
-            tool: "web_search".into(),
+            tool: "search_web".into(),
             message: "missing 'query' argument".into(),
         })?;
 
         let query_trimmed = query.trim();
         if query_trimmed.is_empty() {
             return Err(BytodeError::Tool {
-                tool: "web_search".into(),
+                tool: "search_web".into(),
                 message: "query is empty".into(),
             });
         }
@@ -78,25 +78,25 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
         }
 
         let client = client_builder.build().map_err(|e| BytodeError::Tool {
-            tool: "web_search".into(),
+            tool: "search_web".into(),
             message: format!("failed to build HTTP client: {}", e),
         })?;
 
         let response = client.get(&url).send().await.map_err(|e| BytodeError::Tool {
-            tool: "web_search".into(),
+            tool: "search_web".into(),
             message: format!("request failed: {}", e),
         })?;
 
         let status = response.status();
         if !status.is_success() {
             return Err(BytodeError::Tool {
-                tool: "web_search".into(),
+                tool: "search_web".into(),
                 message: format!("DuckDuckGo returned HTTP {}", status),
             });
         }
 
         let body = response.text().await.map_err(|e| BytodeError::Tool {
-            tool: "web_search".into(),
+            tool: "search_web".into(),
             message: format!("failed to read response body: {}", e),
         })?;
 
@@ -104,7 +104,7 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
 
         if results.is_empty() {
             return Ok(ToolResult::Text {
-                source: "web_search".into(),
+                source: "search_web".into(),
                 content: "no results found".into(),
                 truncated: false,
             });
@@ -113,7 +113,7 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
         let content = results.join("\n\n");
 
         Ok(ToolResult::Text {
-            source: "web_search".into(),
+            source: "search_web".into(),
             content,
             truncated: false,
         })
@@ -241,10 +241,10 @@ fn strip_html(s: &str) -> String {
     collapsed
 }
 
-impl WebSearchTool {
+impl SearchWebTool {
     pub fn entry(timeout_secs: u64, proxy: Option<String>) -> ToolEntry {
         ToolEntry {
-            tool: Box::new(WebSearchTool { timeout_secs, proxy }),
+            tool: Box::new(SearchWebTool { timeout_secs, proxy }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         }

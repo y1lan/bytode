@@ -1,6 +1,6 @@
 # bytode
 
-> **by**tode = **编**译 **To**ken **de** 代码 —— 终端 Rust 编程助手
+> **by**tode = **B**ian(便) *Y*i(宜) **To**ken **de** 代码 —— 终端 Rust 编程助手
 
 bytode 是一个终端编码代理（ReAct 循环 + DeepSeek + LSP + TUI），专注于 Rust 项目开发。工作在终端内部，通过类型化工具与代码库交互，**零 Shell 访问**。
 

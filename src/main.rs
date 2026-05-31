@@ -27,10 +27,10 @@ use tools::{
     cargo::CargoTool,
     check::CheckTool,
     file::{ReadFileTool, WriteFileTool},
-    git::{GitDiffTool, GitLogTool, GitStatusTool},
+    git::{GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStatusTool},
     lsp_diag::DiagnosticsTool,
     search::SearchTool,
-    web::WebSearchTool,
+    web::SearchWebTool,
     ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
 };
 
@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
             availability: ToolAvailability::DetectedLanguage { languages: &["rust"] },
         },
         ToolEntry {
-            tool: Box::new(WebSearchTool {
+            tool: Box::new(SearchWebTool {
                 timeout_secs: config.web_search.timeout_secs,
                 proxy: config.web_search.proxy.clone(),
             }),
@@ -142,6 +142,16 @@ async fn main() -> Result<()> {
         ToolEntry {
             tool: Box::new(GitLogTool { project_root: project_root.clone() }),
             category: ToolCategory::ReadOnly,
+            availability: ToolAvailability::Always,
+        },
+        ToolEntry {
+            tool: Box::new(GitCommitTool { project_root: project_root.clone() }),
+            category: ToolCategory::Modification,
+            availability: ToolAvailability::Always,
+        },
+        ToolEntry {
+            tool: Box::new(GitPushTool { project_root: project_root.clone() }),
+            category: ToolCategory::Modification,
             availability: ToolAvailability::Always,
         },
     ];

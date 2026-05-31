@@ -225,6 +225,8 @@ impl Agent {
             plan_disabled.insert("git_status".into());
             plan_disabled.insert("git_diff".into());
             plan_disabled.insert("git_log".into());
+            plan_disabled.insert("git_commit".into());
+            plan_disabled.insert("git_push".into());
         }
 
         self.registry.activate_for(
@@ -259,7 +261,7 @@ impl Agent {
 
     /// Reconstruct chat history text from loaded turns for UI display
     pub fn chat_history_text(&self) -> Vec<String> {
-        self.context.memory.recent_turns().iter().flat_map(|t| {
+        self.context.memory.recent_turns().iter().filter_map(|t| {
             let mut entries = Vec::new();
             if let Some(ref input) = t.user_input {
                 entries.push(format!("\u{25b8} {}", input));
@@ -268,7 +270,7 @@ impl Agent {
                 && !text.is_empty() {
                     entries.push(text.clone());
                 }
-            entries
+            if entries.is_empty() { None } else { Some(entries.join("\n")) }
         }).collect()
     }
 }
@@ -338,6 +340,17 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         "web_search" => {
             let q = args["query"].as_str().unwrap_or("?");
             if q.len() > 60 { format!("\"{}...\"", &q[..57]) } else { format!("\"{q}\"") }
+        }
+        "git_commit" => {
+            let msg = args["message"].as_str().unwrap_or("?");
+            if msg.len() > 50 { format!("\"{}...\"", &msg[..47]) } else { format!("\"{msg}\"") }
+        }
+        "git_push" => {
+            let mut parts = Vec::new();
+            if let Some(r) = args["remote"].as_str().filter(|r| *r != "origin") { parts.push(format!("remote={r}")); }
+            if let Some(b) = args["branch"].as_str() { parts.push(format!("branch={b}")); }
+            if args["force"].as_bool().unwrap_or(false) { parts.push("force".into()); }
+            if parts.is_empty() { "origin".into() } else { parts.join(", ") }
         }
         _ => "?".into(),
     }

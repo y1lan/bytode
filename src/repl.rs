@@ -41,6 +41,7 @@ async fn run_inner(
     let entries = Arc::new(Mutex::new(entries));
 
     let mut input = String::new();
+    let mut pending: Option<String> = None;
     let mut sidebar = false;
     let mut streaming = false;
     let mut scroll = ScrollMode::Auto;
@@ -92,6 +93,7 @@ async fn run_inner(
                 streaming: if streaming { Some(show_stream_buf.lock().unwrap().clone()) } else { None },
                 scroll,
                 user_input: input.clone(),
+                pending: pending.clone(),
                 approval: None,
                 primary_language: pl.clone(),
                 detection_source: ds.clone(),
@@ -205,7 +207,12 @@ async fn run_inner(
                             if let Some(ref mut a) = agent_opt {
                                 if handle_slash(a, &msg, &entries) { continue; }
                             }
-                            if msg.is_empty() || streaming { continue; }
+                            if msg.is_empty() { continue; }
+                            if streaming {
+                                *show_stream_buf.lock().unwrap() = format!("[pending] {}", msg);
+                                pending = Some(msg);
+                                continue;
+                            }
 
                             last_msg = Some(std::time::Instant::now());
                             entries.lock().unwrap().push(HistoryEntry::User(msg.clone()));

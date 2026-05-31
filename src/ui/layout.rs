@@ -27,6 +27,7 @@ pub struct UiState {
     pub streaming: Option<String>,
     pub scroll: ScrollMode,
     pub user_input: String,
+    pub pending: Option<String>,
     pub approval: Option<(String, String)>,
     pub primary_language: String,
     pub detection_source: String,
@@ -66,6 +67,14 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
     }
 
     render::user_input(frame, input_area_raw, &state.user_input);
+    if let Some(ref pending) = state.pending {
+        let pending_area = Rect::new(input_area_raw.x, input_area_raw.y.saturating_sub(1), input_area_raw.width, 1);
+        let line = Line::from(Span::styled(
+            format!("  [pending] {pending}"),
+            Style::default().fg(Color::Rgb(223, 142, 29)).add_modifier(Modifier::DIM),
+        ));
+        frame.render_widget(Paragraph::new(line).style(Style::default().bg(Color::Rgb(239, 241, 245))), pending_area);
+    }
     statusbar::render(frame, status_area, &state.status);
     if let Some(area) = sidebar_area { render_sidebar(frame, area, state); }
     if let Some((ref path, ref diff)) = state.approval { render::approve(frame, path, diff, 30); }
@@ -177,7 +186,7 @@ mod tests {
                 mode: String::new(), elapsed: String::new(), spinner: ' ',
             },
             tool_result: None, entries, streaming, scroll,
-            user_input: String::new(), approval: None,
+            user_input: String::new(), pending: None, approval: None,
             primary_language: String::new(), detection_source: String::new(),
         }
     }
