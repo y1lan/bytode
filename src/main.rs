@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod lsp;
 mod project;
 mod tools;
 

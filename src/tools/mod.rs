@@ -1,5 +1,6 @@
 pub mod check;
 pub mod file;
+pub mod lsp_diag;
 pub mod search;
 
 use crate::error::Result;
