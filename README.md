@@ -1,17 +1,21 @@
 # bytode
 
-> **BYTODE** = **B**ian(便) **Y**i(宜) **To**ken co**DE** 代码 —— 终端 Rust 编程助手
+> **BYTODE** = **B**ian(便) **Y**i(宜) **To**ken co**DE** —— 终端 Rust 编程助手
 
 bytode 是一个终端编码代理（ReAct 循环 + DeepSeek + LSP + TUI），目前专注于 Rust 项目开发。工作在终端内部，通过类型化工具与代码库交互，**零 Shell 访问**。
-
-完全vibing，纯粹大便，大家想拉就拉。
 
 ## 安装
 
 ```bash
-git clone <repo>
+git clone https://github.com/y1lan/bytode.git
 cd bytode
-cargo build --release
+cargo install --path .
+```
+
+`~/.cargo/bin/bytode` 安装完成后即可全局使用：
+
+```bash
+bytode "帮我重构 src/main.rs"
 ```
 
 ### 依赖
@@ -34,7 +38,7 @@ export DEEPSEEK_API_KEY="sk-..."
 ### 交互模式 (REPL)
 
 ```bash
-cargo run
+bytode
 ```
 
 启动 ratatui TUI 终端，进入异步 REPL 循环（`tokio::select!` 并发处理键盘事件和 LLM SSE 流）。
@@ -50,7 +54,7 @@ cargo run
 ### 单次任务 (One-shot)
 
 ```bash
-cargo run -- "在 src/main.rs 中添加一个问候函数"
+bytode "在 src/main.rs 中添加一个问候函数"
 ```
 
 单次任务模式自动加载已有会话，流式输出到 stdout。
@@ -58,7 +62,7 @@ cargo run -- "在 src/main.rs 中添加一个问候函数"
 ### 指定模型
 
 ```bash
-cargo run -- --model deepseek-v4-flash
+bytode --model deepseek-v4-flash
 ```
 
 ### 命令行参数
