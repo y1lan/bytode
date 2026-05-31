@@ -4,6 +4,8 @@
 
 bytode 是一个终端编码代理（ReAct 循环 + DeepSeek + LSP + TUI），目前专注于 Rust 项目开发。工作在终端内部，通过类型化工具与代码库交互，**零 Shell 访问**。
 
+完全vibing，纯粹大便，大家想拉就拉。
+
 ## 安装
 
 ```bash
