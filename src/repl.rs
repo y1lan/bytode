@@ -2,10 +2,10 @@ use crate::agent::{Agent, AgentMode, AgentOutput};
 use crate::project::ProjectProfile;
 use crate::ui::{layout::UiState, statusbar::StatusBarState, Terminal};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-use futures::StreamExt;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 
 pub async fn run(
     agent: Agent,
@@ -15,24 +15,21 @@ pub async fn run(
     detection_source: &str,
     chat_history_init: Vec<String>,
 ) -> Agent {
-    let result = std::panic::AssertUnwindSafe(run_inner(
-        agent,
-        profile,
-        git_branch,
-        git_dirty,
-        detection_source,
-        chat_history_init,
+    std::panic::AssertUnwindSafe(run_inner(
+        agent, profile, git_branch, git_dirty, detection_source, chat_history_init,
     ))
     .catch_unwind()
-    .await;
-    match result {
-        Ok(agent) => agent,
-        Err(_) => {
-            Terminal::restore().ok();
-            eprintln!("bytode panicked, terminal restored");
-            std::process::exit(1);
-        }
-    }
+    .await
+    .unwrap_or_else(|_| {
+        Terminal::restore().ok();
+        eprintln!("bytode panicked, terminal restored");
+        std::process::exit(1);
+    })
+}
+
+enum StreamEvent {
+    Chunk(String),
+    Tool(String),
 }
 
 async fn run_inner(
@@ -45,268 +42,174 @@ async fn run_inner(
 ) -> Agent {
     let mut agent_opt = Some(agent);
 
-    let terminal: Arc<Mutex<Terminal>> = Arc::new(Mutex::new(
-        Terminal::init().expect("failed to init terminal"),
-    ));
-    let mut user_input = String::new();
-    let mut sidebar_visible = false;
+    let terminal = Arc::new(Mutex::new(Terminal::init().expect("terminal")));
+    let chat: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(chat_history_init));
+    let scroll = Arc::new(Mutex::new(0usize));
 
-    let chat_history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(chat_history_init));
-    let scroll_offset: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    let mut input = String::new();
+    let mut sidebar = false;
+    let mut streaming = false;
+    let mut snap_model = String::new();
+    let mut snap_mode = String::new();
+    let mut snap_tools: Vec<String> = vec![];
+    let mut last_msg: Option<std::time::Instant> = None;
+    let mut stream_buf = String::new();
+    let show_stream_buf = Arc::new(Mutex::new(String::new()));
+
+    let pl = format!("{} [{}]", profile.primary, profile.build_system);
+    let ds = detection_source.to_string();
+    let gb = git_branch;
+    let gd = git_dirty;
 
     {
-        let cancel = agent_opt
-            .as_ref()
-            .expect("agent missing")
-            .cancel_token();
+        let cancel = agent_opt.as_ref().expect("agent missing").cancel_token();
         tokio::spawn(async move {
             tokio::signal::ctrl_c().await.ok();
             cancel.store(true, Ordering::Relaxed);
         });
     }
 
-    let mut event_stream = crossterm::event::EventStream::new();
-    let mut turn_task: Option<tokio::task::JoinHandle<Agent>> = None;
-    let mut streaming = false;
-    let mut last_msg: Option<std::time::Instant> = None;
-    let mut snap: Option<StreamSnapshot> = None;
-
-    let primary_lang = format!("{} [{}]", profile.primary, profile.build_system);
-    let ds = detection_source.to_string();
-    let gb = git_branch;
-    let gd = git_dirty;
+    let mut events = crossterm::event::EventStream::new();
+    let mut rx: Option<mpsc::UnboundedReceiver<StreamEvent>> = None;
+    let mut turn_handle: Option<tokio::task::JoinHandle<Agent>> = None;
 
     loop {
+        // Render
         {
-            let history = chat_history.lock().expect("history lock");
-            let offset = *scroll_offset.lock().expect("scroll lock");
-            let snapshot = history.clone();
-            drop(history);
-
-            let (tool_names, model, mode, ctx_used, ctx_total, cost, calls) =
-                if let Some(a) = agent_opt.as_ref() {
-                    (a.tool_names(), a.model_name().to_string(), mode_str(a.mode()),
-                     a.context_used(), a.context_total(), a.session_cost(), a.session_call_count())
-                } else if let Some(ref s) = snap {
-                    (s.tool_names.clone(), s.model.clone(), s.mode.clone(), 0u64, 1_000_000u64, 0.0, 0u64)
-                } else {
-                    continue;
-                };
-
-            let task_str = if streaming { "thinking...".to_string() } else { "idle".to_string() };
-
-            let state = UiState {
-                sidebar_visible,
-                tool_names: tool_names.clone(),
-                status: StatusBarState {
-                    dir: std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
-                    git_branch: gb.clone(),
-                    git_dirty: gd,
-                    task: task_str,
-                    model: model.clone(),
-                    ctx_used,
-                    ctx_total,
-                    tool_count: tool_names.len(),
-                    session_cost: cost,
-                    session_calls: calls,
-                    mode: mode.clone(),
-                    elapsed: elapsed_str(last_msg),
-                },
-                tool_result: None,
-                history: snapshot,
-                streaming: None,
-                scroll_offset: offset,
-                user_input: user_input.clone(),
-                approval: None,
-                primary_language: primary_lang.clone(),
-                detection_source: ds.clone(),
+            let (tn, model, mode, cu, ct, cost, calls) = if let Some(ref a) = agent_opt {
+                (a.tool_names(), a.model_name().to_string(), mode_str(a.mode()),
+                 a.context_used(), a.context_total(), a.session_cost(), a.session_call_count())
+            } else {
+                (snap_tools.clone(), snap_model.clone(), snap_mode.clone(),
+                 0u64, 1_000_000u64, 0.0, 0u64)
             };
 
+            let st = UiState {
+                sidebar_visible: sidebar,
+                tool_names: tn.clone(),
+                status: StatusBarState {
+                    dir: std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
+                    git_branch: gb.clone(), git_dirty: gd,
+                    task: if streaming { "thinking...".into() } else { "idle".into() },
+                    model: model.clone(), ctx_used: cu, ctx_total: ct,
+                    tool_count: tn.len(), session_cost: cost, session_calls: calls,
+                    mode: mode.clone(), elapsed: elapsed_fmt(last_msg),
+                    spinner: spinner_char(),
+                },
+                tool_result: None,
+                history: chat.lock().unwrap().clone(),
+                streaming: if streaming { Some(show_stream_buf.lock().unwrap().clone()) } else { None },
+                scroll_offset: *scroll.lock().unwrap(),
+                user_input: input.clone(),
+                approval: None,
+                primary_language: pl.clone(),
+                detection_source: ds.clone(),
+            };
             if let Ok(mut t) = terminal.lock() {
-                let _ = t.draw(|frame| crate::ui::layout::render_ui(frame, &state));
+                let _ = t.draw(|frame| crate::ui::layout::render_ui(frame, &st));
             }
         }
 
         tokio::select! {
             biased;
 
-            result = wait_turn(&mut turn_task) => {
-                turn_task = None;
-                snap = None;
-                match result {
-                    Some(a) => {
-                        agent_opt = Some(a);
-                        streaming = false;
-                        *scroll_offset.lock().expect("scroll lock") = 0;
+            msg = recv_stream(&mut rx) => {
+                match msg {
+                    Some(StreamEvent::Chunk(text)) => {
+                        stream_buf.push_str(&text);
+                        *show_stream_buf.lock().unwrap() = stream_buf.clone();
                     }
+                    Some(StreamEvent::Tool(_name)) => {}
                     None => {
-                        Terminal::restore().ok();
-                        return agent_opt.take().unwrap_or_else(|| {
-                            eprintln!("fatal: agent lost after task panic");
-                            std::process::exit(1);
-                        });
+                        rx = None;
+                        streaming = false;
+                        let ft = std::mem::take(&mut stream_buf);
+                        if !ft.is_empty() { chat.lock().unwrap().push(ft); }
+                        *show_stream_buf.lock().unwrap() = String::new();
+                        *scroll.lock().unwrap() = 0;
                     }
                 }
             }
 
-            event = event_stream.next() => {
-                let Some(Ok(event)) = event else { continue };
+            result = join_turn(&mut turn_handle) => {
+                turn_handle = None;
+                if let Some(a) = result { agent_opt = Some(a); }
+            }
 
-                match event {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            event = events.next() => {
+                let Some(Ok(ev)) = event else { continue };
+                match ev {
+                    Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
+                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             if streaming {
                                 if let Some(ref a) = agent_opt {
                                     a.cancel_token().store(true, Ordering::Relaxed);
                                 }
                             } else {
                                 Terminal::restore().ok();
-                                return agent_opt.take().expect("agent missing on exit");
+                                return agent_opt.take().expect("agent missing");
                             }
                         }
-                        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            sidebar_visible = !sidebar_visible;
-                        }
+                        KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => sidebar = !sidebar,
                         KeyCode::Up | KeyCode::PageUp => {
-                            let mut off = scroll_offset.lock().expect("scroll lock");
-                            let step = if key.code == KeyCode::PageUp { 20 } else { 3 };
-                            *off = (*off + step).min(10_000);
+                            let mut off = scroll.lock().unwrap();
+                            *off = (*off + if k.code == KeyCode::PageUp { 20 } else { 5 }).min(100_000);
                         }
                         KeyCode::Down | KeyCode::PageDown => {
-                            let mut off = scroll_offset.lock().expect("scroll lock");
-                            let step = if key.code == KeyCode::PageDown { 20 } else { 3 };
-                            *off = off.saturating_sub(step);
+                            let mut off = scroll.lock().unwrap();
+                            *off = off.saturating_sub(if k.code == KeyCode::PageDown { 20 } else { 5 });
                         }
-                        KeyCode::Char(c) => { user_input.push(c); }
-                        KeyCode::Backspace => { user_input.pop(); }
+                        KeyCode::Char(c) => input.push(c),
+                        KeyCode::Backspace => { input.pop(); }
                         KeyCode::Enter => {
-                            let input = std::mem::take(&mut user_input);
-                            if input == "/exit" || input == "/quit" {
+                            let msg = std::mem::take(&mut input);
+                            if msg == "/exit" || msg == "/quit" {
                                 Terminal::restore().ok();
-                                return agent_opt.take().expect("agent missing on exit");
+                                return agent_opt.take().expect("agent missing");
                             }
-
                             if let Some(ref mut a) = agent_opt {
-                                if handle_slash(a, &input, &chat_history) { continue; }
+                                if handle_slash(a, &msg, &chat) { continue; }
                             }
-                            if input.is_empty() || streaming { continue; }
+                            if msg.is_empty() || streaming { continue; }
 
-                            {
-                                let mut h = chat_history.lock().expect("history lock");
-                                h.push(format!("\u{25b8} {input}"));
-                            }
-                            *scroll_offset.lock().expect("scroll lock") = 0;
+                            last_msg = Some(std::time::Instant::now());
+                            chat.lock().unwrap().push(format!("\u{25b8} {msg}"));
+                            *scroll.lock().unwrap() = 0;
+                            stream_buf.clear();
+                            *show_stream_buf.lock().unwrap() = String::new();
                             streaming = true;
-                            let start_time = std::time::Instant::now();
-                            last_msg = Some(start_time);
 
                             let mut a = agent_opt.take().expect("agent already taken");
-                            let tool_names = a.tool_names();
-                            let model_s = a.model_name().to_string();
-                            let mode_s = mode_str(a.mode());
-                            snap = Some(StreamSnapshot {
-                                tool_names: tool_names.clone(),
-                                model: model_s.clone(),
-                                mode: mode_s.clone(),
-                                dir: std::env::current_dir().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
-                            });
+                            snap_tools = a.tool_names();
+                            snap_model = a.model_name().to_string();
+                            snap_mode = mode_str(a.mode());
 
-                            let terminal_clone = Arc::clone(&terminal);
-                            let history_clone = Arc::clone(&chat_history);
-                            let history_clone2 = Arc::clone(&chat_history);
-                            let scroll_clone = Arc::clone(&scroll_offset);
-                            let input_clone = input.clone();
-                            let pl = primary_lang.clone();
-                            let ds_clone = ds.clone();
-                            let gb_clone = gb.clone();
-                            let dir_s = std::env::current_dir()
-                                .map(|d| d.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            let start_time = start_time;
+                            let (tx, new_rx) = mpsc::unbounded_channel();
+                            let tx2 = tx.clone();
+                            rx = Some(new_rx);
 
-                            let streaming_buf = Arc::new(Mutex::new(String::new()));
-                            let buf_clone = Arc::clone(&streaming_buf);
-                            let current_tool = Arc::new(Mutex::new(String::new()));
-                            let tool_clone = Arc::clone(&current_tool);
-                            let last_draw = Arc::new(Mutex::new(std::time::Instant::now()));
-
+                            let chat2 = Arc::clone(&chat);
                             let handle = tokio::spawn(async move {
-                                let result = a.run_turn_streaming(&input_clone, move |chunk| {
-                                    buf_clone.lock().expect("buf lock").push_str(chunk);
+                                let res = a.run_turn_streaming(&msg, move |chunk| {
                                     let trimmed = chunk.trim();
                                     if let Some(rest) = trimmed.strip_prefix("\u{27f3} ") {
                                         if let Some((name, _)) = rest.split_once('(') {
-                                            *tool_clone.lock().expect("tool lock") = name.to_string();
+                                            let _ = tx2.send(StreamEvent::Tool(name.to_string()));
                                         }
                                     }
-                                    // Don't reset scroll — user might be scrolling
-
-                                    let now = std::time::Instant::now();
-                                    if now.duration_since(*last_draw.lock().expect("last draw lock")).as_millis() < 20 {
-                                        return;
-                                    }
-                                    *last_draw.lock().expect("last draw lock") = now;
-
-                                    if let Ok(mut t) = terminal_clone.lock() {
-                                        let h = history_clone.lock().expect("history lock");
-                                        let start = h.len().saturating_sub(10);
-                                        let snapshot: Vec<String> = h.iter().skip(start).cloned().collect();
-                                        let streamed = buf_clone.lock().expect("buf lock").clone();
-                                        let tool = tool_clone.lock().expect("tool lock").clone();
-                                        let task_label = if tool.is_empty() {
-                                            "thinking...".into()
-                                        } else {
-                                            format!("{tool}()...")
-                                        };
-
-                                        let _ = t.draw(|frame| {
-                                            let s = UiState {
-                                                sidebar_visible,
-                                                tool_names: tool_names.clone(),
-                                                status: StatusBarState {
-                                                    dir: dir_s.clone(),
-                                                    git_branch: gb_clone.clone(),
-                                                    git_dirty: gd,
-                                                    task: task_label,
-                                                    model: model_s.clone(),
-                                                    ctx_used: 0,
-                                                    ctx_total: 1_000_000,
-                                                    tool_count: tool_names.len(),
-                                                    session_cost: 0.0,
-                                                    session_calls: 0,
-                                                    mode: mode_s.clone(),
-                                                    elapsed: elapsed_str(Some(start_time)),
-                                                },
-                                                tool_result: None,
-                                                history: snapshot,
-                                                streaming: if streamed.is_empty() {
-                                                    None
-                                                } else {
-                                                    Some(streamed)
-                                                },
-                                                scroll_offset: 0,
-                                                user_input: String::new(),
-                                                approval: None,
-                                                primary_language: pl.clone(),
-                                                detection_source: ds_clone.clone(),
-                                            };
-                                            crate::ui::layout::render_ui(frame, &s);
-                                        });
-                                    }
+                                    let _ = tx2.send(StreamEvent::Chunk(chunk.to_string()));
                                 }).await;
-
-                                let final_text = streaming_buf.lock().expect("buf lock").clone();
-                                let mut h = history_clone2.lock().expect("history lock");
-                                match result {
-                                    Ok(AgentOutput::Text(_)) => {
-                                        if !final_text.is_empty() { h.push(final_text); }
+                                drop(tx);
+                                match res {
+                                    Err(e) => {
+                                        chat2.lock().unwrap().push(format!("Error: {e}"));
                                     }
-                                    Err(e) => { h.push(format!("Error: {e}")); }
+                                    _ => {}
                                 }
                                 a
                             });
 
-                            turn_task = Some(handle);
+                            turn_handle = Some(handle);
                         }
                         _ => {}
                     },
@@ -317,11 +220,11 @@ async fn run_inner(
     }
 }
 
-fn handle_slash(agent: &mut Agent, input: &str, chat_history: &Arc<Mutex<Vec<String>>>) -> bool {
+fn handle_slash(agent: &mut Agent, input: &str, chat: &Arc<Mutex<Vec<String>>>) -> bool {
+    let mut h = chat.lock().unwrap();
     if input.starts_with("/model") {
-        let parts: Vec<&str> = input.split_whitespace().collect();
-        let mut h = chat_history.lock().expect("history lock");
         h.push(format!("\u{25b8} {input}"));
+        let parts: Vec<&str> = input.split_whitespace().collect();
         if parts.len() == 1 {
             h.push(format!("Current model: {}", agent.model_name()));
             h.push("Usage: /model pro | /model flash".to_string());
@@ -329,10 +232,7 @@ fn handle_slash(agent: &mut Agent, input: &str, chat_history: &Arc<Mutex<Vec<Str
             let model = match parts[1].to_lowercase().as_str() {
                 "pro" | "deepseek-v4-pro" => "deepseek-v4-pro",
                 "flash" | "deepseek-v4-flash" => "deepseek-v4-flash",
-                name => {
-                    h.push(format!("Unknown model: {name}. Use pro or flash."));
-                    return true;
-                }
+                name => { h.push(format!("Unknown model: {name}")); return true; }
             };
             agent.set_model(model.to_string());
             h.push(format!("Switched to model: {model}"));
@@ -340,29 +240,18 @@ fn handle_slash(agent: &mut Agent, input: &str, chat_history: &Arc<Mutex<Vec<Str
         return true;
     }
     if input.starts_with("/plan") {
+        h.push(format!("\u{25b8} {input}"));
         let toggle = input.split_whitespace().nth(1).map(|s| s.to_lowercase());
         let new_mode = match toggle.as_deref() {
             Some("on") | Some("enable") => Some(AgentMode::Plan),
             Some("off") | Some("disable") => Some(AgentMode::Normal),
-            None | Some("toggle") => Some(if agent.mode() == AgentMode::Plan {
-                AgentMode::Normal
-            } else {
-                AgentMode::Plan
-            }),
+            None | Some("toggle") => Some(if agent.mode() == AgentMode::Plan { AgentMode::Normal } else { AgentMode::Plan }),
             _ => None,
         };
         if let Some(mode) = new_mode {
             agent.set_mode(mode);
-            let label = match mode {
-                AgentMode::Plan => "plan (read-only)",
-                AgentMode::Normal => "build",
-            };
-            let mut h = chat_history.lock().expect("history lock");
-            h.push(format!("\u{25b8} {input}"));
-            h.push(format!(
-                "Mode: {label} | tools: {}",
-                agent.tool_names().join(", ")
-            ));
+            let label = match mode { AgentMode::Plan => "plan", AgentMode::Normal => "build" };
+            h.push(format!("Mode: {label} | tools: {}", agent.tool_names().join(", ")));
         }
         return true;
     }
@@ -370,42 +259,40 @@ fn handle_slash(agent: &mut Agent, input: &str, chat_history: &Arc<Mutex<Vec<Str
 }
 
 fn mode_str(mode: AgentMode) -> String {
-    match mode {
-        AgentMode::Normal => "build".into(),
-        AgentMode::Plan => "plan".into(),
-    }
+    match mode { AgentMode::Normal => "build".into(), AgentMode::Plan => "plan".into() }
 }
 
-struct StreamSnapshot {
-    tool_names: Vec<String>,
-    model: String,
-    mode: String,
-    dir: String,
-}
-
-fn elapsed_str(since: Option<std::time::Instant>) -> String {
+fn elapsed_fmt(since: Option<std::time::Instant>) -> String {
     match since {
         Some(t) => {
             let ms = t.elapsed().as_millis();
-            if ms < 1000 {
-                format!("{}ms", ms)
-            } else if ms < 60_000 {
-                format!("{:.1}s", ms as f64 / 1000.0)
-            } else {
-                let secs = ms / 1000;
-                format!("{}m{}s", secs / 60, secs % 60)
-            }
+            if ms < 1000 { format!("{ms}ms") }
+            else if ms < 60_000 { format!("{:.1}s", ms as f64 / 1000.0) }
+            else { format!("{}m{}s", ms / 60000, (ms % 60000) / 1000) }
         }
         None => "0ms".into(),
     }
 }
 
-async fn wait_turn(task: &mut Option<tokio::task::JoinHandle<Agent>>) -> Option<Agent> {
-    match task.as_mut() {
-        Some(handle) => match handle.await {
-            Ok(a) => Some(a),
-            Err(_) => None,
-        },
+fn spinner_char() -> char {
+    const SPIN: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let idx = (now.as_millis() / 100) as usize % SPIN.len();
+    SPIN[idx]
+}
+
+async fn recv_stream(rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>) -> Option<StreamEvent> {
+    match rx.as_mut() {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn join_turn(h: &mut Option<tokio::task::JoinHandle<Agent>>) -> Option<Agent> {
+    match h.as_mut() {
+        Some(handle) => match handle.await { Ok(a) => Some(a), Err(_) => None },
         None => std::future::pending().await,
     }
 }

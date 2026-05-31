@@ -14,6 +14,7 @@ pub struct StatusBarState {
     pub session_calls: u64,
     pub mode: String,
     pub elapsed: String,
+    pub spinner: char,
 }
 
 pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
@@ -91,11 +92,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
 
     let right = Line::from(vec![
         Span::styled(
-            format!(" {}", state.elapsed),
-            if state.elapsed.contains('s') {
-                Style::default().fg(Color::Rgb(156, 160, 176))
-            } else {
+            format!("{} {}", state.spinner, state.elapsed),
+            if state.elapsed.contains('m') {
                 Style::default().fg(Color::Rgb(223, 142, 29))
+            } else {
+                Style::default().fg(Color::Rgb(156, 160, 176))
             },
         ),
         Span::styled(" │", Style::default().fg(Color::Rgb(172, 176, 190))),

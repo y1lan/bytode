@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod layout;
 pub mod render;
 pub mod statusbar;

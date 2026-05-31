@@ -25,8 +25,8 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
     frame.render_widget(bg, main_area);
 
     let (content_area, sidebar_area) = if state.sidebar_visible {
-        let chunks = Layout::horizontal([Constraint::Min(40), Constraint::Length(24)])
-            .split(main_area);
+        let chunks =
+            Layout::horizontal([Constraint::Min(40), Constraint::Length(24)]).split(main_area);
         (chunks[0], Some(chunks[1]))
     } else {
         (main_area, None)
@@ -45,42 +45,16 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
     let [output_area, input_area_raw] =
         Layout::vertical([Constraint::Min(4), Constraint::Length(1)]).areas(scroll_area);
 
-    // Flatten all messages into a single Vec<Line> with markdown rendering
-    let mut all_lines: Vec<Line> = Vec::new();
-    for msg in &state.history {
-        let prefix = if msg.starts_with('\u{25b8}') { "\u{25b8} " } else { "" };
-        let is_user = !prefix.is_empty();
-        if is_user {
-            let text = msg.strip_prefix("\u{25b8} ").unwrap_or(msg);
-            all_lines.push(Line::from(Span::styled(
-                format!("\u{25b8} {text}"),
-                Style::default().fg(Color::Rgb(30, 102, 245)).add_modifier(Modifier::BOLD),
-            )));
-            all_lines.push(Line::from(""));
-        } else {
-            let rendered = render::render_md(msg);
-            all_lines.extend(rendered);
-            all_lines.push(Line::from(""));
-        }
+    if let Some(ref result) = state.tool_result {
+        render::tool_result(frame, output_area, result);
+    } else {
+        let all = flatten_and_scroll(state, output_area.height as usize);
+        let paragraph = Paragraph::new(all)
+            .style(Style::default().fg(Color::Rgb(76, 79, 105)))
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(paragraph, output_area);
     }
-    if let Some(s) = &state.streaming {
-        let rendered = render::render_md(s);
-        all_lines.extend(rendered);
-    }
-
-    // Line-based scroll: scroll_offset lines from the bottom
-    let total = all_lines.len();
-    let visible = output_area.height as usize;
-    let skip = state.scroll_offset.min(total.saturating_sub(1));
-    let start = total.saturating_sub(skip + visible);
-    let slice: Vec<Line> = all_lines.into_iter().skip(start).take(visible + skip).collect();
-
-    let paragraph = Paragraph::new(slice)
-        .block(Block::default())
-        .style(Style::default().fg(Color::Rgb(76, 79, 105)))
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, output_area);
 
     render::user_input(frame, input_area_raw, &state.user_input);
     statusbar::render(frame, status_area, &state.status);
@@ -155,4 +129,118 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &UiState) {
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
+}
+
+fn flatten_and_scroll(state: &UiState, visible: usize) -> Vec<Line<'static>> {
+    let mut all: Vec<Line<'static>> = Vec::new();
+    for msg in &state.history {
+        if let Some(text) = msg.strip_prefix('\u{25b8}') {
+            all.push(Line::from(Span::styled(
+                format!("   \u{25b8} {text}"),
+                Style::default().fg(Color::Rgb(30, 102, 245)).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            for line in render::render_md(msg) {
+                let owned: Vec<Span<'static>> = line.spans.iter().map(|s| {
+                    Span::styled(s.content.to_string(), s.style)
+                }).collect();
+                all.push(Line::from(owned));
+            }
+        }
+        // Visual separator between messages
+        all.push(Line::from(Span::styled(" ", Style::default())));
+    }
+    if let Some(s) = &state.streaming {
+        for line in render::render_md(s) {
+            let owned: Vec<Span<'static>> = line.spans.iter().map(|s| {
+                Span::styled(s.content.to_string(), s.style)
+            }).collect();
+            all.push(Line::from(owned));
+        }
+    }
+    let total = all.len();
+    let skip = state.scroll_offset.min(total.saturating_sub(1));
+    let start = total.saturating_sub(skip + visible);
+    all.into_iter().skip(start).take(visible + skip).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::statusbar::StatusBarState;
+
+    fn mk(hist: Vec<String>, scroll: usize, streaming: Option<String>) -> UiState {
+        UiState {
+            sidebar_visible: false,
+            tool_names: vec![],
+            status: StatusBarState {
+                dir: String::new(), git_branch: None, git_dirty: false,
+                task: String::new(), model: String::new(),
+                ctx_used: 0, ctx_total: 0, tool_count: 0,
+                session_cost: 0.0, session_calls: 0,
+                mode: String::new(), elapsed: String::new(), spinner: ' ',
+            },
+            tool_result: None, history: hist, streaming,
+            scroll_offset: scroll, user_input: String::new(),
+            approval: None, primary_language: String::new(),
+            detection_source: String::new(),
+        }
+    }
+
+    fn line_text(lines: &[Line]) -> String {
+        lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.as_ref())).collect()
+    }
+
+    #[test]
+    fn scroll_zero_shows_bottom() {
+        let lines = flatten_and_scroll(&mk(vec!["a".into(), "b".into(), "c".into()], 0, None), 3);
+        let t = line_text(&lines);
+        assert!(t.contains("c"), "{t:?}");
+    }
+
+    #[test]
+    fn scroll_offset_hides_bottom() {
+        let l0 = flatten_and_scroll(&mk(vec!["a".into(), "b".into(), "c".into()], 0, None), 3);
+        let l2 = flatten_and_scroll(&mk(vec!["a".into(), "b".into(), "c".into()], 4, None), 3);
+        assert_ne!(line_text(&l0), line_text(&l2));
+    }
+
+    #[test]
+    fn empty_history_is_empty() {
+        assert!(flatten_and_scroll(&mk(vec![], 0, None), 10).is_empty());
+    }
+
+    #[test]
+    fn user_message_has_arrow() {
+        let lines = flatten_and_scroll(&mk(vec!["\u{25b8} hello".into()], 0, None), 10);
+        let t = line_text(&lines);
+        assert!(t.contains("hello"), "{t:?}");
+    }
+
+    #[test]
+    fn streaming_appended() {
+        let lines = flatten_and_scroll(&mk(vec!["old".into()], 0, Some("new".into())), 10);
+        let t = line_text(&lines);
+        assert!(t.contains("old") && t.contains("new"), "{t:?}");
+    }
+
+    #[test]
+    fn huge_scroll_does_not_panic() {
+        flatten_and_scroll(&mk(vec!["x".into()], 99999, None), 5);
+    }
+
+    #[test]
+    fn visible_clipped_to_height() {
+        let msgs: Vec<String> = (0..50).map(|i| format!("{i}")).collect();
+        let lines = flatten_and_scroll(&mk(msgs, 0, None), 3);
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn long_multiline_message_scrollable() {
+        let long = "1\n2\n3\n4\n5\n6\n7\n8\n9";
+        let lines = flatten_and_scroll(&mk(vec![long.into()], 3, None), 3);
+        let t = line_text(&lines);
+        assert!(!t.contains("   ") && !t.is_empty(), "scrolled: {t:?}");
+    }
 }
