@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentMode, AgentOutput};
+use crate::agent::{Agent, AgentMode};
 use crate::project::ProjectProfile;
 use crate::ui::layout::{HistoryEntry, ScrollMode, UiState};
 use crate::ui::{statusbar::StatusBarState, Terminal};
