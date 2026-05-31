@@ -1,6 +1,20 @@
+mod config;
 mod error;
 
+use clap::Parser;
 use error::Result;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "bytode", about = "Terminal coding agent")]
+struct Cli {
+    /// One-shot task (no REPL)
+    task: Option<String>,
+
+    /// Project root directory
+    #[arg(short, long, default_value = ".")]
+    project: PathBuf,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -11,6 +25,13 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    println!("bytode v0.1.0");
+    let cli = Cli::parse();
+    let project_root = std::fs::canonicalize(&cli.project)?;
+    let config = config::Config::load(&project_root)?;
+
+    tracing::info!("bytode v0.1.0 — {:?}", cli.task);
+    tracing::info!("project root: {}", project_root.display());
+    tracing::info!("tool selection: {:?}", config.tools);
+
     Ok(())
 }
