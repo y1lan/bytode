@@ -40,6 +40,10 @@ pub struct RawToolsConfig {
     pub disable: Option<Vec<String>>,
     #[serde(default)]
     pub search: RawSearchConfig,
+    #[serde(default)]
+    pub web_search: RawWebSearchConfig,
+    #[serde(default)]
+    pub cargo: RawCargoConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +69,40 @@ impl Default for RawSearchConfig {
 fn default_search_engine() -> String { "ripgrep".into() }
 fn default_ignore_dirs() -> Vec<String> { vec!["target".into(), ".git".into()] }
 fn default_max_results() -> usize { 200 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawWebSearchConfig {
+    #[serde(default = "default_web_timeout")]
+    pub timeout_secs: u64,
+    pub proxy: Option<String>,
+}
+
+impl Default for RawWebSearchConfig {
+    fn default() -> Self {
+        RawWebSearchConfig {
+            timeout_secs: default_web_timeout(),
+            proxy: None,
+        }
+    }
+}
+
+fn default_web_timeout() -> u64 { 15 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawCargoConfig {
+    #[serde(default = "default_cargo_timeout")]
+    pub timeout_ms: u64,
+}
+
+impl Default for RawCargoConfig {
+    fn default() -> Self {
+        RawCargoConfig {
+            timeout_ms: default_cargo_timeout(),
+        }
+    }
+}
+
+fn default_cargo_timeout() -> u64 { 120_000 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawAgentConfig {
@@ -94,6 +132,8 @@ fn default_forbidden() -> Vec<String> { vec!["/etc/*".into()] }
 pub struct Config {
     pub project_lang_override: Option<String>,
     pub search: SearchConfig,
+    pub web_search: WebSearchConfig,
+    pub cargo: CargoConfig,
     pub agent: AgentConfig,
     pub security: SecurityConfig,
     pub build: BuildConfig,
@@ -123,6 +163,17 @@ pub struct SecurityConfig {
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
     pub extra_check_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WebSearchConfig {
+    pub timeout_secs: u64,
+    pub proxy: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CargoConfig {
+    pub timeout_ms: u64,
 }
 
 impl Config {
@@ -181,6 +232,9 @@ impl Config {
             self.search.engine = t.search.engine;
             self.search.ignore_dirs = t.search.ignore_dirs;
             self.search.max_results = t.search.max_results;
+            self.web_search.timeout_secs = t.web_search.timeout_secs;
+            self.web_search.proxy = t.web_search.proxy;
+            self.cargo.timeout_ms = t.cargo.timeout_ms;
         }
         if let Some(a) = raw.agent {
             self.agent = AgentConfig {
@@ -213,6 +267,13 @@ impl Default for Config {
                 engine: "ripgrep".into(),
                 ignore_dirs: vec!["target".into(), ".git".into()],
                 max_results: 200,
+            },
+            web_search: WebSearchConfig {
+                timeout_secs: 15,
+                proxy: None,
+            },
+            cargo: CargoConfig {
+                timeout_ms: 120_000,
             },
             agent: AgentConfig {
                 confirm_before_write: true,

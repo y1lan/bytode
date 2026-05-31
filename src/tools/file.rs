@@ -3,6 +3,7 @@ use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct ReadFileTool {
     pub project_root: PathBuf,
@@ -21,6 +22,12 @@ WHEN TO USE: Before editing any file. When you need to understand code structure
 WHEN NOT TO USE: For searching across files — use search_code instead.
 For compiler errors — use get_diagnostics instead.
 
+EXAMPLES:
+  read_file(path="/home/user/project/src/main.rs")           # read a file
+  read_file(path="/home/user/project/src/main.rs", offset=10) # read from line 10
+  read_file(path="/home/user/project/src/main.rs", limit=50)  # read first 50 lines
+CAUTION: path must be a file, NOT a directory. Use search_code to discover files first.
+
 RETURNS: { "type": "file", path, content (with line numbers), line_count, total_bytes }"#
     }
 
@@ -30,7 +37,7 @@ RETURNS: { "type": "file", path, content (with line numbers), line_count, total_
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute file path to read"
+                    "description": "Absolute file path to read. Must point to a file, NOT a directory."
                 },
                 "offset": {
                     "type": "integer",
@@ -121,6 +128,7 @@ pub struct WriteFileTool {
     pub confirm_before_write: bool,
     pub max_file_size: u64,
     pub forbidden_patterns: Vec<String>,
+    pub lsp: Option<Arc<crate::lsp::LspClient>>,
 }
 
 #[async_trait]
@@ -166,6 +174,34 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
     }
     fn timeout_ms(&self) -> u64 {
         10_000
+    }
+
+    fn format_result_for_display(&self, result: &ToolResult) -> Option<String> {
+        if let ToolResult::WriteConfirmation { path, diff, bytes_written, lines } = result {
+            let short = path.replace(
+                &std::env::var("HOME").unwrap_or_default(),
+                "~",
+            );
+            if diff.starts_with("new file:") {
+                Some(format!("  {} ({}, {} lines)", diff, bytes_written, lines))
+            } else {
+                let changed: Vec<&str> = diff
+                    .lines()
+                    .filter(|l| l.starts_with('-') || l.starts_with('+'))
+                    .take(40)
+                    .collect();
+                let mut s = format!("  {} ({} bytes, {} lines)\n", short, bytes_written, lines);
+                for l in &changed {
+                    s.push_str(&format!("  {}\n", l));
+                }
+                if diff.lines().filter(|l| l.starts_with('-') || l.starts_with('+')).count() > 40 {
+                    s.push_str("  ...\n");
+                }
+                Some(s)
+            }
+        } else {
+            None
+        }
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
@@ -236,6 +272,10 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
         let tmp = resolved.with_extension("bytode_tmp");
         std::fs::write(&tmp, content)?;
         std::fs::rename(&tmp, &resolved)?;
+
+        if let Some(ref lsp) = self.lsp {
+            lsp.notify_did_change(&resolved, content).await;
+        }
 
         let diff = match &old_content {
             Some(old) => compute_unified_diff(old, content, &path_s),

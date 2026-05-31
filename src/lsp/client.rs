@@ -144,6 +144,30 @@ impl LspClient {
         cache.get(file).cloned().unwrap_or_default()
     }
 
+    pub async fn notify_did_change(&self, file_path: &std::path::Path, content: &str) {
+        let uri = format!("file://{}", file_path.display());
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didChange",
+            "params": {
+                "textDocument": {
+                    "uri": uri,
+                    "version": 1
+                },
+                "contentChanges": [
+                    { "text": content }
+                ]
+            }
+        });
+
+        let mut guard = self.process.lock().await;
+        if let Some(ref mut proc) = *guard {
+            let data = build_lsp_message(&notification);
+            let _ = proc.stdin.write_all(&data).await;
+            let _ = proc.stdin.flush().await;
+        }
+    }
+
     pub async fn shutdown(&self) {
         let mut guard = self.process.lock().await;
         if let Some(mut proc) = guard.take() {

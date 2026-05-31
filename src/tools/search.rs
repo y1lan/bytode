@@ -24,6 +24,11 @@ WHEN TO USE: Find where a symbol is defined. Find all call sites. Discover patte
 WHEN NOT TO USE: For build errors → use get_diagnostics. For reading code → use read_file.
 For full text of a file → use read_file.
 
+EXAMPLES:
+  search_code(pattern="fn main")                                # search entire project
+  search_code(pattern="struct Config", path="/home/user/src")   # search in a directory
+  search_code(pattern="impl.*Handler", path="/home/user/src/")  # regex pattern
+
 Matches are truncated at 200 results. Use a more specific pattern if truncated.
 RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}], truncated }"#
     }
@@ -49,6 +54,28 @@ RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}
 
     fn timeout_ms(&self) -> u64 {
         15_000
+    }
+
+    fn format_result_for_display(&self, result: &ToolResult) -> Option<String> {
+        if let ToolResult::Matches { pattern, count, items, truncated } = result {
+            let mut s = format!("  {} match{} for \"{}\"\n", count, if *count == 1 { "" } else { "es" }, pattern);
+            for m in items.iter().take(5) {
+                let file = m.file.replace(
+                    &std::env::var("HOME").unwrap_or_default(),
+                    "~",
+                );
+                s.push_str(&format!("  {}:{} {}...\n", file, m.line, m.text.chars().take(60).collect::<String>()));
+            }
+            if items.len() > 5 {
+                s.push_str(&format!("  ... and {} more", items.len() - 5));
+            }
+            if *truncated {
+                s.push_str(" (truncated)");
+            }
+            Some(s)
+        } else {
+            None
+        }
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {

@@ -126,7 +126,10 @@ impl DeepSeekClient {
                                 tool_call_name = name.clone();
                             }
                             if let Some(ref args) = func.arguments {
+                                tracing::debug!("tool_call_args chunk: {:?}", args);
                                 tool_call_args.push_str(args);
+                            } else {
+                                tracing::error!("tool_call no arguments field in chunk");
                             }
                         }
                     }
@@ -157,10 +160,79 @@ impl DeepSeekClient {
 
         if !tool_call_name.is_empty() {
             let arguments: Value = if tool_call_args.is_empty() {
+                tracing::error!("tool_call '{}' has empty arguments", tool_call_name);
                 Value::Null
             } else {
-                serde_json::from_str(&tool_call_args).unwrap_or(Value::Null)
+                match serde_json::from_str(&tool_call_args) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!(
+                            "tool_call '{}' args parse error: {} raw={:?}",
+                            tool_call_name, e, tool_call_args
+                        );
+                        // Try to extract all JSON objects — LLM sometimes concatenates multiple calls
+                        // Pick the one with the most keys (most complete)
+                        if e.to_string().contains("trailing characters") {
+                            let mut objs: Vec<Value> = Vec::new();
+                            let mut pos = 0;
+                            let bytes = tool_call_args.as_bytes();
+                            while pos < bytes.len() {
+                                // Skip non-{ chars
+                                while pos < bytes.len() && bytes[pos] != b'{' {
+                                    pos += 1;
+                                }
+                                if pos >= bytes.len() {
+                                    break;
+                                }
+                                let mut depth = 0u32;
+                                let start = pos;
+                                while pos < bytes.len() {
+                                    match bytes[pos] {
+                                        b'{' => depth += 1,
+                                        b'}' => {
+                                            depth -= 1;
+                                            if depth == 0 {
+                                                let slice = &tool_call_args[start..=pos];
+                                                if let Ok(v) = serde_json::from_str::<Value>(slice) {
+                                                    objs.push(v);
+                                                }
+                                                pos += 1;
+                                                break;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                    pos += 1;
+                                }
+                            }
+                            if !objs.is_empty() {
+                                // Pick the object with the most keys (most complete)
+                                objs.sort_by(|a, b| {
+                                    let ka = a.as_object().map(|o| o.len()).unwrap_or(0);
+                                    let kb = b.as_object().map(|o| o.len()).unwrap_or(0);
+                                    kb.cmp(&ka)
+                                });
+                                let best = objs.into_iter().next().unwrap();
+                                tracing::info!(
+                                    "tool_call '{}' extracted best args from concatenated JSON: {:?}",
+                                    tool_call_name, best
+                                );
+                                return Ok(LlmOutput::ToolCall(ToolCall {
+                                    id: tool_call_id,
+                                    name: tool_call_name,
+                                    arguments: best,
+                                }));
+                            }
+                        }
+                        Value::Null
+                    }
+                }
             };
+
+            tracing::info!(
+                "tool_call: name={} args={:?}",
+                tool_call_name, arguments
+            );
 
             return Ok(LlmOutput::ToolCall(ToolCall {
                 id: tool_call_id,
@@ -194,6 +266,16 @@ impl DeepSeekClient {
     /// Cumulative session API call count
     pub fn session_call_count(&self) -> u64 {
         self.session_calls.load(Ordering::Relaxed)
+    }
+
+    /// Current model name
+    pub fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    /// Switch model at runtime
+    pub fn set_model(&mut self, model: String) {
+        self.model = model;
     }
 
     /// Estimated cumulative session cost in USD
@@ -255,6 +337,14 @@ pub fn build_assistant_tool_call_message(tool_call: &ToolCall) -> ChatCompletion
 
     ChatCompletionRequestAssistantMessageArgs::default()
         .tool_calls(vec![tc])
+        .build()
+        .unwrap()
+        .into()
+}
+
+pub fn build_assistant_text_message(content: &str) -> ChatCompletionRequestMessage {
+    ChatCompletionRequestAssistantMessageArgs::default()
+        .content(content.to_string())
         .build()
         .unwrap()
         .into()

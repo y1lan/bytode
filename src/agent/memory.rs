@@ -1,7 +1,8 @@
 use crate::tools::ToolResult;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Turn {
     pub user_input: Option<String>,
     pub assistant_text: Option<String>,
@@ -9,12 +10,21 @@ pub struct Turn {
     pub user_intent: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRecord {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
     pub result: ToolResult,
+}
+
+impl ToolCallRecord {
+    pub fn is_error(&self) -> bool {
+        matches!(
+            &self.result,
+            ToolResult::Text { source, .. } if source == "tool_error"
+        )
+    }
 }
 
 impl Turn {
@@ -35,6 +45,12 @@ pub struct MemoryLayer {
     compress_threshold: f64,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct SessionData {
+    pub turns: Vec<Turn>,
+    pub summary: Option<String>,
+}
+
 impl MemoryLayer {
     pub fn new(max_recent: usize) -> Self {
         MemoryLayer {
@@ -42,6 +58,32 @@ impl MemoryLayer {
             summary: None,
             max_recent,
             compress_threshold: 0.8,
+        }
+    }
+
+    pub fn from_session(data: SessionData, max_recent: usize) -> Self {
+        MemoryLayer {
+            recent: data.turns.into(),
+            summary: data.summary,
+            max_recent,
+            compress_threshold: 0.8,
+        }
+    }
+
+    pub fn session_data(&self) -> SessionData {
+        SessionData {
+            turns: self
+                .recent
+                .iter()
+                .filter(|t| {
+                    // Keep turn if it has at least one successful tool call
+                    // OR it has assistant text (meaningful completion)
+                    t.assistant_text.is_some()
+                        || t.tool_calls.iter().any(|tc| !tc.is_error())
+                })
+                .cloned()
+                .collect(),
+            summary: self.summary.clone(),
         }
     }
 

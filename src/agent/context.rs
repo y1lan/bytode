@@ -44,11 +44,6 @@ impl ContextBuilder {
             if let Some(ref input) = t.user_input {
                 messages.push(llm::build_user_message(input));
             }
-            if let Some(ref text) = t.assistant_text {
-                // Skip — assistant text is between tool calls
-                // We include tool results instead
-                let _ = text;
-            }
             for record in &t.tool_calls {
                 // Must emit assistant tool_calls before the tool result
                 let assistant_tc = llm::ToolCall {
@@ -60,6 +55,9 @@ impl ContextBuilder {
 
                 let result_text = format_tool_result(&record.result);
                 messages.push(llm::build_tool_result_message(&result_text, &record.id));
+            }
+            if let Some(ref text) = t.assistant_text {
+                messages.push(llm::build_assistant_text_message(text));
             }
         }
 
@@ -103,6 +101,10 @@ impl ContextBuilder {
     }
     pub fn ctx_total(&self) -> u64 {
         self.ctx_total
+    }
+
+    pub fn rebuild_core_prompt(&mut self, profile: &ProjectProfile, registry: &ToolRegistry) {
+        self.core_prompt = build_core_prompt(profile, registry);
     }
 }
 

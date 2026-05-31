@@ -1,15 +1,18 @@
+pub mod cargo;
 pub mod check;
 pub mod file;
+pub mod git;
 pub mod lsp_diag;
 pub mod search;
+pub mod web;
 
 use crate::error::Result;
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ToolResult {
     #[serde(rename = "file")]
@@ -61,7 +64,7 @@ pub enum ToolResult {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DiagnosticItem {
     pub file: String,
     pub line: u32,
@@ -71,7 +74,7 @@ pub struct DiagnosticItem {
     pub code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MatchItem {
     pub file: String,
     pub line: u32,
@@ -103,6 +106,10 @@ pub trait Tool: Send + Sync {
         0
     }
     fn max_consecutive_calls(&self) -> Option<u32> {
+        None
+    }
+
+    fn format_result_for_display(&self, _result: &ToolResult) -> Option<String> {
         None
     }
 }
