@@ -148,7 +148,10 @@ fn flatten_and_scroll(state: &UiState, visible: usize) -> Vec<Line<'static>> {
             }
         }
         // Visual separator between messages
-        all.push(Line::from(Span::styled(" ", Style::default())));
+        all.push(Line::from(Span::styled(
+            "\u{2500}".repeat(60),
+            Style::default().fg(Color::Rgb(204, 208, 218)),
+        )));
     }
     if let Some(s) = &state.streaming {
         for line in render::render_md(s) {
