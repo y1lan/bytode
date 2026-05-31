@@ -53,8 +53,10 @@ pub fn render_ui(frame: &mut Frame, state: &UiState) {
         scroll_area_raw.width.saturating_sub(8), scroll_area_raw.height.saturating_sub(2),
     );
 
+    let input_lines = state.user_input.matches('\n').count() + 1;
+    let input_h = (input_lines as u16).min(8);
     let [output_area, input_area_raw] =
-        Layout::vertical([Constraint::Min(4), Constraint::Length(1)]).areas(scroll_area);
+        Layout::vertical([Constraint::Min(4), Constraint::Length(input_h)]).areas(scroll_area);
 
     if let Some(ref result) = state.tool_result {
         render::tool_result(frame, output_area, result);

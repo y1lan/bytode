@@ -316,13 +316,37 @@ fn is_type(word: &str) -> bool {
 }
 
 pub fn user_input(frame: &mut Frame, area: Rect, input: &str) {
-    let line = Line::from(vec![
-        Span::styled("bytode", Style::default().fg(BLUE).add_modifier(Modifier::BOLD)),
-        Span::styled("> ", Style::default().fg(GREEN)),
-        Span::styled(input, Style::default().fg(TXT)),
-        Span::styled("|", Style::default().fg(TXT).add_modifier(Modifier::SLOW_BLINK)),
-    ]);
-    let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Rgb(239, 241, 245)));
+    let mut lines: Vec<Line> = Vec::new();
+    let split: Vec<&str> = if input.is_empty() { vec![""] } else { input.split('\n').collect() };
+
+    for (i, part) in split.iter().enumerate() {
+        let part = *part;
+        if i == 0 {
+            lines.push(Line::from(vec![
+                Span::styled("bytode", Style::default().fg(BLUE).add_modifier(Modifier::BOLD)),
+                Span::styled("> ", Style::default().fg(GREEN)),
+                Span::styled(part, Style::default().fg(TXT)),
+                if split.len() == 1 {
+                    Span::styled("|", Style::default().fg(TXT).add_modifier(Modifier::SLOW_BLINK))
+                } else {
+                    Span::raw("")
+                },
+            ]));
+        } else if i == split.len() - 1 {
+            lines.push(Line::from(vec![
+                Span::styled("      ", Style::default()),
+                Span::styled(part, Style::default().fg(TXT)),
+                Span::styled("|", Style::default().fg(TXT).add_modifier(Modifier::SLOW_BLINK)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("      {part}"),
+                Style::default().fg(TXT),
+            )));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(Color::Rgb(239, 241, 245)));
     frame.render_widget(paragraph, area);
 }
 

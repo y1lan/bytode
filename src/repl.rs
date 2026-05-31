@@ -205,6 +205,9 @@ async fn run_inner(
                         }
                         KeyCode::Char(c) => input.push(c),
                         KeyCode::Backspace => { input.pop(); }
+                        KeyCode::Enter if k.modifiers.contains(KeyModifiers::SHIFT) => {
+                            input.push('\n');
+                        }
                         KeyCode::Enter => {
                             let msg = std::mem::take(&mut input);
                             if msg == "/exit" || msg == "/quit" {
