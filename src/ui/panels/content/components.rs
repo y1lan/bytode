@@ -175,7 +175,7 @@ pub(crate) fn blank_line(width: usize) -> Line<'static> {
 
 pub(crate) fn surface_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let mut spans = spans;
-    let used = spans.iter().map(|span| span.content.chars().count()).sum::<usize>();
+    let used = Line::from(spans.clone()).width();
     let padding = width.saturating_sub(used);
     spans.push(Span::styled(" ".repeat(padding), Style::default().bg(BG)));
     Line::from(spans)
@@ -190,7 +190,7 @@ fn block_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
 }
 
 fn padded_line(mut spans: Vec<Span<'static>>, width: usize, bg: Color) -> Line<'static> {
-    let used = spans.iter().map(|span| span.content.chars().count()).sum::<usize>();
+    let used = Line::from(spans.clone()).width();
     let padding = width.saturating_sub(used);
     spans.push(Span::styled(" ".repeat(padding), Style::default().bg(bg)));
     Line::from(spans)

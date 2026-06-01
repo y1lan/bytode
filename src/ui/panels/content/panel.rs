@@ -7,12 +7,15 @@ use crate::ui::panels::{
 };
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Wrap};
+use std::cell::Cell;
 
 pub struct ContentPanel {
     entries: Vec<HistoryEntry>,
     stream_buffer: String,
     streaming_visible: String,
     scroll: ScrollMode,
+    last_total_lines: Cell<usize>,
+    last_visible_lines: Cell<usize>,
 }
 
 impl ContentPanel {
@@ -22,6 +25,8 @@ impl ContentPanel {
             stream_buffer: String::new(),
             streaming_visible: String::new(),
             scroll: ScrollMode::Auto,
+            last_total_lines: Cell::new(0),
+            last_visible_lines: Cell::new(0),
         }
     }
 
@@ -42,20 +47,31 @@ impl ContentPanel {
     }
 
     pub fn handle_key(&mut self, key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {
+        let max_scroll = self.max_scroll();
         let up_step = match key {
             KeyAction::Up => Some(1),
             KeyAction::PageUp => Some(20),
             KeyAction::Home => {
-                self.scroll = ScrollMode::Manual(100_000);
+                if max_scroll == 0 {
+                    return DispatchResult::Ignored;
+                }
+                self.scroll = ScrollMode::Manual(max_scroll);
                 return DispatchResult::Consumed(Vec::new());
             }
             _ => None,
         };
         if let Some(step) = up_step {
+            if max_scroll == 0 {
+                return DispatchResult::Ignored;
+            }
             self.scroll = match self.scroll {
-                ScrollMode::Auto => ScrollMode::Manual(step),
+                ScrollMode::Auto => ScrollMode::Manual(step.min(max_scroll)),
                 ScrollMode::Manual(current) => {
-                    ScrollMode::Manual(current.saturating_add(step).min(100_000))
+                    let next = current.saturating_add(step).min(max_scroll);
+                    if next == current {
+                        return DispatchResult::Ignored;
+                    }
+                    ScrollMode::Manual(next)
                 }
             };
             return DispatchResult::Consumed(Vec::new());
@@ -75,9 +91,12 @@ impl ContentPanel {
         };
         if let Some(step) = down_step {
             self.scroll = match self.scroll {
-                ScrollMode::Auto => ScrollMode::Auto,
+                ScrollMode::Auto => return DispatchResult::Ignored,
                 ScrollMode::Manual(current) => {
                     let next = current.saturating_sub(step);
+                    if next == current {
+                        return DispatchResult::Ignored;
+                    }
                     if next == 0 {
                         ScrollMode::Auto
                     } else {
@@ -143,8 +162,14 @@ impl ContentPanel {
     }
 
     fn flatten(&self, visible: usize, width: usize, exec_state: &ExecState) -> Vec<Line<'static>> {
-        let mut all = Vec::new();
+        let all = self.collect_lines(width, exec_state);
+        self.last_total_lines.set(all.len());
+        self.last_visible_lines.set(visible);
+        self.slice_visible_lines(all, visible)
+    }
 
+    fn collect_lines(&self, width: usize, exec_state: &ExecState) -> Vec<Line<'static>> {
+        let mut all = Vec::new();
         for (index, entry) in self.entries.iter().enumerate() {
             if index > 0 {
                 all.push(blank_line(width));
@@ -172,17 +197,26 @@ impl ContentPanel {
                 width,
             ));
         }
+        all
+    }
 
+    fn slice_visible_lines(&self, all: Vec<Line<'static>>, visible: usize) -> Vec<Line<'static>> {
         let total = all.len();
         let skip = match self.scroll {
             ScrollMode::Auto => 0,
-            ScrollMode::Manual(lines) => lines.min(total.saturating_sub(1)),
+            ScrollMode::Manual(lines) => lines.min(self.max_scroll().min(total.saturating_sub(1))),
         };
         let start = total.saturating_sub(skip.saturating_add(visible));
         all.into_iter()
             .skip(start)
             .take(visible.saturating_add(skip))
             .collect()
+    }
+
+    fn max_scroll(&self) -> usize {
+        self.last_total_lines
+            .get()
+            .saturating_sub(self.last_visible_lines.get())
     }
 }
 
