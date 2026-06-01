@@ -76,7 +76,7 @@ impl InputPanel {
                 self.cursor = 0;
                 DispatchResult::Consumed(Vec::new())
             }
-            KeyAction::AltEnter | KeyAction::ShiftEnter => {
+            KeyAction::ShiftEnter => {
                 self.insert_char('\n');
                 DispatchResult::Consumed(Vec::new())
             }

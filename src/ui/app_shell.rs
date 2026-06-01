@@ -465,7 +465,7 @@ fn task_label(exec_state: &ExecState) -> &'static str {
 }
 
 fn help_overlay_text() -> &'static str {
-    "Ctrl+D  exit\nCtrl+C  cancel intent\nCtrl+T  toggle sidebar\nCtrl+/  toggle help\nTab     next focus\nShift+Tab previous focus\n\nInput:\nEnter submit\nAlt+Enter newline\nShift+Enter newline\nCtrl+A/Ctrl+E move\nCtrl+U clear\n\nContent:\nUp/Down scroll\nPageUp/PageDown page\nHome top\nEnd bottom"
+    "Ctrl+D  exit\nCtrl+C  cancel intent\nCtrl+T  toggle sidebar\nCtrl+/  toggle help\nTab     next focus\nShift+Tab previous focus\n\nInput:\nEnter submit\nShift+Enter newline\nCtrl+A/Ctrl+E move\nCtrl+U clear\n\nContent:\nUp/Down scroll\nPageUp/PageDown page\nHome top\nEnd bottom"
 }
 
 #[cfg(test)]
