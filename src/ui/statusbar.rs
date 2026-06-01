@@ -97,11 +97,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &StatusBarState) {
                 Style::default().fg(Color::Rgb(156, 160, 176))
             },
         ),
-        Span::styled(" │", Style::default().fg(Color::Rgb(172, 176, 190))),
-        Span::styled(
-            format!("{} ", state.model),
-            Style::default().fg(Color::Rgb(136, 57, 239)),
-        ),
         Span::styled("│", Style::default().fg(Color::Rgb(172, 176, 190))),
         Span::styled(" ctx ", Style::default().fg(Color::Rgb(156, 160, 176))),
         Span::styled(draw_ctx_bar(state.ctx_used, state.ctx_total), ctx_color),

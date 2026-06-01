@@ -1,8 +1,10 @@
 use crate::ui::events::{DispatchResult, Effect, KeyAction, PanelId, WindowSlot, WindowSpec};
-use crate::ui::panels::{panel_block, BG, ORANGE, PanelContext, RenderContext, TXT_SUBTLE, UiContext};
+use crate::ui::panels::{panel_block, BG, BLUE, ORANGE, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext};
 use crate::ui::render;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+
+const MAX_INPUT_LINES: u16 = 6;
 
 pub struct InputPanel {
     input: String,
@@ -29,11 +31,14 @@ impl InputPanel {
     }
 
     pub fn window_spec(&self, _ctx: &UiContext<'_>) -> WindowSpec {
-        let mut lines = self.input.matches('\n').count() as u16 + 1;
-        if self.pending.is_some() || self.notice.is_some() {
-            lines = lines.saturating_add(1);
+        let input_lines = self.visible_input_lines();
+        let total_lines = input_lines.saturating_add(1);
+        WindowSpec {
+            id: self.id(),
+            z_index: 0,
+            slot: WindowSlot::Bottom,
+            size: total_lines.saturating_add(2).clamp(4, MAX_INPUT_LINES + 3),
         }
-        WindowSpec { id: self.id(), z_index: 0, slot: WindowSlot::Bottom, size: lines.clamp(2, 9) }
     }
 
     pub fn handle_key(&mut self, key: KeyAction, ctx: &PanelContext<'_>) -> DispatchResult {
@@ -97,19 +102,22 @@ impl InputPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        if let Some(line) = self.pending_notice_line() {
-            let notice_area = Rect::new(inner.x, inner.y, inner.width, 1);
-            frame.render_widget(Paragraph::new(line).style(Style::default().bg(BG)), notice_area);
-        }
-
-        let offset = if self.pending.is_some() || self.notice.is_some() { 1 } else { 0 };
+        let input_height = self.visible_input_lines().min(inner.height.saturating_sub(1)).max(1);
         let input_area = Rect::new(
             inner.x,
-            inner.y.saturating_add(offset),
+            inner.y,
             inner.width,
-            inner.height.saturating_sub(offset).max(1),
+            input_height,
         );
+        let footer_area = Rect::new(
+            inner.x,
+            inner.y.saturating_add(input_height),
+            inner.width,
+            1,
+        );
+
         render::render_input(frame, input_area, &self.input, self.cursor);
+        frame.render_widget(Paragraph::new(self.footer_line(ctx)).style(Style::default().bg(BG)), footer_area);
     }
 
     pub fn take_pending(&mut self) -> Option<String> {
@@ -150,6 +158,33 @@ impl InputPanel {
                 Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::DIM),
             ))
         })
+    }
+
+    fn footer_line(&self, ctx: &RenderContext<'_>) -> Line<'static> {
+        let status = &ctx.runtime.status;
+        let mode = if status.mode.is_empty() { "build" } else { status.mode.as_str() };
+        let activity = if status.task.is_empty() {
+            "idle".to_string()
+        } else {
+            format!("{} {}", status.spinner, status.task)
+        };
+        let notice = self
+            .pending_notice_line()
+            .map(|line| line.to_string())
+            .unwrap_or_else(|| "tab focus  ctrl+/ help  ctrl+d exit".to_string());
+
+        Line::from(vec![
+            Span::styled("▎ ", Style::default().fg(BLUE)),
+            Span::styled(format!("{mode}"), Style::default().fg(TXT).add_modifier(Modifier::BOLD)),
+            Span::styled("  ", Style::default().bg(BG)),
+            Span::styled(activity, Style::default().fg(ORANGE)),
+            Span::styled("  ", Style::default().bg(BG)),
+            Span::styled(notice, Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::DIM)),
+        ])
+    }
+
+    fn visible_input_lines(&self) -> u16 {
+        (self.input.matches('\n').count() as u16 + 1).clamp(1, MAX_INPUT_LINES)
     }
 
     fn len_chars(&self) -> usize {
