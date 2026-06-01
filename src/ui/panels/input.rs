@@ -1,4 +1,6 @@
-use crate::ui::events::{DispatchResult, Effect, KeyAction, PanelId, WindowSlot, WindowSpec};
+use crate::ui::events::{
+    DispatchResult, Effect, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec,
+};
 use crate::ui::panels::{panel_block, BG, BLUE, ORANGE, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext};
 use crate::ui::render;
 use ratatui::prelude::*;
@@ -118,6 +120,15 @@ impl InputPanel {
 
         render::render_input(frame, input_area, &self.input, self.cursor);
         frame.render_widget(Paragraph::new(self.footer_line(ctx)).style(Style::default().bg(BG)), footer_area);
+    }
+
+    pub fn handle_mouse(
+        &mut self,
+        _mouse: MouseAction,
+        _area: Rect,
+        _ctx: &PanelContext<'_>,
+    ) -> DispatchResult {
+        DispatchResult::Ignored
     }
 
     pub fn take_pending(&mut self) -> Option<String> {

@@ -1,13 +1,19 @@
-use super::components::{blank_line, render_history_entry, surface_line};
-use super::model::{AssistantMessage, HistoryEntry, ScrollMode, UserMessage};
+use super::components::{
+    blank_line, render_history_entry, render_history_entry_with_hits, surface_line,
+    ContentHitRegion, ContentHitTarget,
+};
+use super::model::{AssistantMessage, AssistantPart, HistoryEntry, ScrollMode, UserMessage};
 use super::parser::{parse_assistant_message, stream_tool_state};
-use crate::ui::events::{DispatchResult, ExecState, KeyAction, PanelId, WindowSlot, WindowSpec};
+use crate::ui::events::{
+    DispatchResult, ExecState, KeyAction, MouseAction, MouseButton, PanelId, WindowSlot,
+    WindowSpec,
+};
 use crate::ui::panels::{
     panel_block, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, BG,
 };
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 pub struct ContentPanel {
     entries: Vec<HistoryEntry>,
@@ -16,6 +22,7 @@ pub struct ContentPanel {
     scroll: ScrollMode,
     last_total_lines: Cell<usize>,
     last_visible_lines: Cell<usize>,
+    last_hit_regions: RefCell<Vec<ContentHitRegion>>,
 }
 
 impl ContentPanel {
@@ -27,6 +34,7 @@ impl ContentPanel {
             scroll: ScrollMode::Auto,
             last_total_lines: Cell::new(0),
             last_visible_lines: Cell::new(0),
+            last_hit_regions: RefCell::new(Vec::new()),
         }
     }
 
@@ -117,14 +125,44 @@ impl ContentPanel {
 
         let width = inner.width as usize;
         let visible = inner.height as usize;
-        let lines = self.collect_lines(width, ctx.exec_state);
+        let (lines, hit_regions) = self.collect_lines(width, ctx.exec_state);
         self.last_total_lines.set(lines.len());
         self.last_visible_lines.set(visible);
+        self.last_hit_regions.replace(hit_regions);
 
         let paragraph = Paragraph::new(lines)
             .style(Style::default().fg(TXT).bg(BG))
             .scroll((self.scroll_offset(self.last_total_lines.get(), visible) as u16, 0));
         frame.render_widget(paragraph, inner);
+    }
+
+    pub fn handle_mouse(
+        &mut self,
+        mouse: MouseAction,
+        area: Rect,
+        _ctx: &PanelContext<'_>,
+    ) -> DispatchResult {
+        match mouse {
+            MouseAction::ScrollUp { .. } => self.scroll_up(3),
+            MouseAction::ScrollDown { .. } => self.scroll_down(3),
+            MouseAction::Down {
+                button: MouseButton::Left,
+                column,
+                row,
+            } => {
+                let inner = panel_block("Conversation", true).inner(area);
+                if !point_in_rect(inner, column, row) {
+                    return DispatchResult::Ignored;
+                }
+
+                if self.toggle_hit_at(inner, row) {
+                    return DispatchResult::Consumed(Vec::new());
+                }
+
+                DispatchResult::Consumed(Vec::new())
+            }
+            MouseAction::Down { .. } => DispatchResult::Ignored,
+        }
     }
 
     pub fn push_user(&mut self, text: String) {
@@ -172,13 +210,18 @@ impl ContentPanel {
         )));
     }
 
-    fn collect_lines(&self, width: usize, _exec_state: &ExecState) -> Vec<Line<'static>> {
+    fn collect_lines(
+        &self,
+        width: usize,
+        _exec_state: &ExecState,
+    ) -> (Vec<Line<'static>>, Vec<ContentHitRegion>) {
         let mut all = Vec::new();
+        let mut hits = Vec::new();
         for (index, entry) in self.entries.iter().enumerate() {
             if index > 0 {
                 all.push(blank_line(width));
             }
-            render_history_entry(entry, width, &mut all);
+            render_history_entry_with_hits(entry, index, width, &mut all, &mut hits);
         }
 
         if !self.streaming_visible.is_empty() {
@@ -201,7 +244,7 @@ impl ContentPanel {
                 width,
             ));
         }
-        all
+        (all, hits)
     }
 
     fn scroll_offset(&self, total_visual_lines: usize, visible: usize) -> usize {
@@ -219,6 +262,92 @@ impl ContentPanel {
             .saturating_sub(self.last_visible_lines.get())
     }
 
+    fn scroll_up(&mut self, step: usize) -> DispatchResult {
+        let max_scroll = self.max_scroll();
+        if max_scroll == 0 {
+            return DispatchResult::Ignored;
+        }
+
+        self.scroll = match self.scroll {
+            ScrollMode::Auto => ScrollMode::Manual(step.min(max_scroll)),
+            ScrollMode::Manual(current) => ScrollMode::Manual(current.saturating_add(step).min(max_scroll)),
+        };
+        DispatchResult::Consumed(Vec::new())
+    }
+
+    fn scroll_down(&mut self, step: usize) -> DispatchResult {
+        self.scroll = match self.scroll {
+            ScrollMode::Auto => return DispatchResult::Ignored,
+            ScrollMode::Manual(current) => {
+                let next = current.saturating_sub(step);
+                if next == 0 {
+                    ScrollMode::Auto
+                } else {
+                    ScrollMode::Manual(next)
+                }
+            }
+        };
+        DispatchResult::Consumed(Vec::new())
+    }
+
+    fn toggle_hit_at(&mut self, inner: Rect, row: u16) -> bool {
+        if inner.height == 0 {
+            return false;
+        }
+
+        let visible_row = row.saturating_sub(inner.y) as usize;
+        let absolute_line = self
+            .scroll_offset(self.last_total_lines.get(), inner.height as usize)
+            .saturating_add(visible_row);
+
+        let target = self
+            .last_hit_regions
+            .borrow()
+            .iter()
+            .find(|region| region.line == absolute_line)
+            .map(|region| region.target);
+
+        let Some(target) = target else {
+            return false;
+        };
+
+        match target {
+            ContentHitTarget::Tool {
+                entry_index,
+                part_index,
+            } => self.toggle_tool_part(entry_index, part_index),
+            ContentHitTarget::Reasoning {
+                entry_index,
+                part_index,
+            } => self.toggle_reasoning_part(entry_index, part_index),
+        }
+    }
+
+    fn toggle_tool_part(&mut self, entry_index: usize, part_index: usize) -> bool {
+        let Some(HistoryEntry::Assistant(message)) = self.entries.get_mut(entry_index) else {
+            return false;
+        };
+        let Some(AssistantPart::Tool(part)) = message.parts.get_mut(part_index) else {
+            return false;
+        };
+        if part.body.is_none() || !matches!(part.presentation, super::model::ToolPresentation::Block) {
+            return false;
+        }
+        part.collapsed = !part.collapsed;
+        true
+    }
+
+    fn toggle_reasoning_part(&mut self, entry_index: usize, part_index: usize) -> bool {
+        let Some(HistoryEntry::Assistant(message)) = self.entries.get_mut(entry_index) else {
+            return false;
+        };
+        let Some(AssistantPart::Reasoning(part)) = message.parts.get_mut(part_index) else {
+            return false;
+        };
+        part.collapsed = !part.collapsed;
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn rendered_text_for_test(
         &self,
@@ -227,15 +356,22 @@ impl ContentPanel {
         exec_state: &ExecState,
     ) -> Vec<String> {
         let all = self.collect_lines(width, exec_state);
-        self.last_total_lines.set(all.len());
+        self.last_total_lines.set(all.0.len());
         self.last_visible_lines.set(visible);
-        let start = self.scroll_offset(all.len(), visible);
-        all.into_iter()
+        let start = self.scroll_offset(all.0.len(), visible);
+        all.0.into_iter()
             .skip(start)
             .take(visible)
             .map(|line| line.to_string())
             .collect()
     }
+}
+
+fn point_in_rect(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
 }
 
 #[cfg(test)]
@@ -351,5 +487,40 @@ mod tests {
         let lines = panel.rendered_text_for_test(6, 120, &exec_state);
         assert!(lines.iter().any(|line| line.contains("read_file")));
         assert!(lines.iter().any(|line| line.contains("1 | use crate::error")));
+    }
+
+    #[test]
+    fn mouse_click_toggles_collapsed_tool_block() {
+        let mut panel = ContentPanel::new(Vec::new());
+        panel.entries.push(HistoryEntry::Assistant(parse_assistant_message(
+            "  ⟳ read_file(src/main.rs)\n   1 | fn main() {}\n   2 | println!(\"hi\");\n   3 | let x = 1;\n   4 | let y = 2;\n   5 | let z = 3;\n   6 | done();\n   7 | extra();\n",
+            stream_tool_state(None),
+        )));
+
+        let exec_state = ExecState::Idle;
+        let (lines, hits) = panel.collect_lines(80, &exec_state);
+        panel.last_total_lines.set(lines.len());
+        panel.last_visible_lines.set(lines.len());
+        panel.last_hit_regions.replace(hits);
+
+        let area = Rect::new(0, 0, 80, 12);
+        let result = panel.handle_mouse(
+            MouseAction::Down {
+                button: MouseButton::Left,
+                column: 2,
+                row: 1,
+            },
+            area,
+            &idle_panel_ctx(),
+        );
+
+        assert!(matches!(result, DispatchResult::Consumed(_)));
+        let HistoryEntry::Assistant(message) = &panel.entries[0] else {
+            panic!("expected assistant entry");
+        };
+        let AssistantPart::Tool(part) = &message.parts[0] else {
+            panic!("expected tool part");
+        };
+        assert!(!part.collapsed);
     }
 }

@@ -1,6 +1,9 @@
 use crate::agent::{Agent, AgentMode};
 use crate::project::ProjectProfile;
-use crate::ui::events::{Effect, ExecState, KeyAction, OverlayId, OverlayState, PanelId, TurnId, WindowSlot};
+use crate::ui::events::{
+    Effect, ExecState, KeyAction, MouseAction, OverlayId, OverlayState, PanelId, TurnId,
+    WindowSlot,
+};
 use crate::ui::overlays::OverlayStack;
 use crate::ui::panels::{
     ContentPanel, HistoryEntry, InputPanel, PanelNode, RenderContext, RuntimeSnapshot,
@@ -116,6 +119,26 @@ impl AppShell {
         let runtime = self.runtime.clone();
         let mut effects = self.window_manager.dispatch_key(
             key,
+            &UiContext {
+                exec_state: &exec_state,
+                runtime: &runtime,
+                sidebar_visible: self.sidebar_visible,
+            },
+        );
+        self.rewrite_panel_effects(&mut effects);
+        effects
+    }
+
+    pub fn dispatch_mouse(&mut self, mouse: MouseAction, area: Rect) -> Vec<Effect> {
+        if self.overlays.has_modal() {
+            return Vec::new();
+        }
+
+        let exec_state = self.exec_state.clone();
+        let runtime = self.runtime.clone();
+        let mut effects = self.window_manager.dispatch_mouse(
+            mouse,
+            area,
             &UiContext {
                 exec_state: &exec_state,
                 runtime: &runtime,

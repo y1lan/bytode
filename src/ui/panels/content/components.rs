@@ -19,6 +19,24 @@ pub(crate) struct ToolPartBlock;
 pub(crate) struct ReasoningBlock;
 pub(crate) struct ErrorBlock;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContentHitTarget {
+    Tool {
+        entry_index: usize,
+        part_index: usize,
+    },
+    Reasoning {
+        entry_index: usize,
+        part_index: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ContentHitRegion {
+    pub line: usize,
+    pub target: ContentHitTarget,
+}
+
 impl TranscriptComponent<UserMessage> for UserCard {
     fn render(&self, value: &UserMessage, width: usize, out: &mut Vec<Line<'static>>) {
         out.push(card_line(
@@ -153,6 +171,21 @@ pub(crate) fn render_history_entry(entry: &HistoryEntry, width: usize, out: &mut
     }
 }
 
+pub(crate) fn render_history_entry_with_hits(
+    entry: &HistoryEntry,
+    entry_index: usize,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    hits: &mut Vec<ContentHitRegion>,
+) {
+    match entry {
+        HistoryEntry::Assistant(message) => {
+            render_assistant_message_with_hits(message, entry_index, width, out, hits)
+        }
+        _ => render_history_entry(entry, width, out),
+    }
+}
+
 fn render_assistant_message(message: &AssistantMessage, width: usize, out: &mut Vec<Line<'static>>) {
     let mut first = true;
     for part in &message.parts {
@@ -165,6 +198,51 @@ fn render_assistant_message(message: &AssistantMessage, width: usize, out: &mut 
             AssistantPart::Text(part) => AssistantTextBlock.render(part, width, out),
             AssistantPart::Tool(part) => ToolPartBlock.render(part, width, out),
             AssistantPart::Reasoning(part) => ReasoningBlock.render(part, width, out),
+        }
+    }
+}
+
+fn render_assistant_message_with_hits(
+    message: &AssistantMessage,
+    entry_index: usize,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    hits: &mut Vec<ContentHitRegion>,
+) {
+    let mut first = true;
+    for (part_index, part) in message.parts.iter().enumerate() {
+        if !first {
+            out.push(blank_line(width));
+        }
+        first = false;
+
+        let header_line = out.len();
+        match part {
+            AssistantPart::Text(part) => AssistantTextBlock.render(part, width, out),
+            AssistantPart::Tool(part) => {
+                ToolPartBlock.render(part, width, out);
+                if matches!(part.presentation, super::model::ToolPresentation::Block)
+                    && part.body.is_some()
+                {
+                    hits.push(ContentHitRegion {
+                        line: header_line,
+                        target: ContentHitTarget::Tool {
+                            entry_index,
+                            part_index,
+                        },
+                    });
+                }
+            }
+            AssistantPart::Reasoning(part) => {
+                ReasoningBlock.render(part, width, out);
+                hits.push(ContentHitRegion {
+                    line: header_line,
+                    target: ContentHitTarget::Reasoning {
+                        entry_index,
+                        part_index,
+                    },
+                });
+            }
         }
     }
 }

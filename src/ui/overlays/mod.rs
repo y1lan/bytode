@@ -94,6 +94,10 @@ impl OverlayStack {
         self.overlays.pop().map(|overlay| overlay.id())
     }
 
+    pub fn has_modal(&self) -> bool {
+        self.overlays.iter().any(OverlayNode::modal)
+    }
+
     pub fn handle_modal_key(&mut self, key: KeyAction) -> Option<Vec<Effect>> {
         let overlay = self
             .overlays

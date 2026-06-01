@@ -1,4 +1,7 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton as CrosstermMouseButton,
+    MouseEvent, MouseEventKind,
+};
 
 pub type TurnId = u64;
 
@@ -84,6 +87,30 @@ pub enum KeyAction {
     CtrlU,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseAction {
+    Down {
+        button: MouseButton,
+        column: u16,
+        row: u16,
+    },
+    ScrollUp {
+        column: u16,
+        row: u16,
+    },
+    ScrollDown {
+        column: u16,
+        row: u16,
+    },
+}
+
 impl KeyAction {
     pub fn from_key_event(event: KeyEvent) -> Option<Self> {
         if event.kind != KeyEventKind::Press {
@@ -146,6 +173,35 @@ impl KeyAction {
             KeyCode::BackTab => Some(KeyAction::BackTab),
             _ => None,
         }
+    }
+}
+
+impl MouseAction {
+    pub fn from_mouse_event(event: MouseEvent) -> Option<Self> {
+        match event.kind {
+            MouseEventKind::Down(button) => Some(MouseAction::Down {
+                button: map_mouse_button(button)?,
+                column: event.column,
+                row: event.row,
+            }),
+            MouseEventKind::ScrollUp => Some(MouseAction::ScrollUp {
+                column: event.column,
+                row: event.row,
+            }),
+            MouseEventKind::ScrollDown => Some(MouseAction::ScrollDown {
+                column: event.column,
+                row: event.row,
+            }),
+            _ => None,
+        }
+    }
+}
+
+fn map_mouse_button(button: CrosstermMouseButton) -> Option<MouseButton> {
+    match button {
+        CrosstermMouseButton::Left => Some(MouseButton::Left),
+        CrosstermMouseButton::Right => Some(MouseButton::Right),
+        CrosstermMouseButton::Middle => Some(MouseButton::Middle),
     }
 }
 

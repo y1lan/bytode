@@ -1,4 +1,4 @@
-use crate::ui::events::{DispatchResult, KeyAction, PanelId, WindowSlot, WindowSpec};
+use crate::ui::events::{DispatchResult, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec};
 use crate::ui::panels::{panel_block, BLUE, CYAN, GREEN, ORANGE, PanelContext, RED, RenderContext, TXT, TXT_SUBTLE, UiContext};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -97,6 +97,34 @@ impl SidebarPanel {
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(paragraph, inner);
+    }
+
+    pub fn handle_mouse(
+        &mut self,
+        mouse: MouseAction,
+        area: Rect,
+        _ctx: &PanelContext<'_>,
+    ) -> DispatchResult {
+        match mouse {
+            MouseAction::ScrollUp { .. } => {
+                self.selected = self.selected.saturating_sub(1);
+                DispatchResult::Consumed(Vec::new())
+            }
+            MouseAction::ScrollDown { .. } => {
+                self.selected = self.selected.saturating_add(1);
+                DispatchResult::Consumed(Vec::new())
+            }
+            MouseAction::Down { row, .. } => {
+                let inner = panel_block("Sidebar", true).inner(area);
+                if row < inner.y.saturating_add(2) {
+                    return DispatchResult::Ignored;
+                }
+
+                let index = row.saturating_sub(inner.y.saturating_add(2)) as usize;
+                self.selected = index;
+                DispatchResult::Consumed(Vec::new())
+            }
+        }
     }
 
     pub fn normalize(&mut self, ctx: &UiContext<'_>) {

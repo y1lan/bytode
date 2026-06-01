@@ -1,4 +1,6 @@
-use crate::ui::events::{DispatchResult, KeyAction, PanelId, WindowSlot, WindowSpec};
+use crate::ui::events::{
+    DispatchResult, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec,
+};
 use crate::ui::panels::{PanelContext, RenderContext, UiContext};
 use crate::ui::statusbar;
 use ratatui::prelude::*;
@@ -27,6 +29,15 @@ impl StatusBarPanel {
     }
 
     pub fn handle_key(&mut self, _key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {
+        DispatchResult::Ignored
+    }
+
+    pub fn handle_mouse(
+        &mut self,
+        _mouse: MouseAction,
+        _area: Rect,
+        _ctx: &PanelContext<'_>,
+    ) -> DispatchResult {
         DispatchResult::Ignored
     }
 

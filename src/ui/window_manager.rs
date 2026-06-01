@@ -1,4 +1,4 @@
-use crate::ui::events::{DispatchResult, Effect, KeyAction, PanelId, WindowSlot};
+use crate::ui::events::{DispatchResult, Effect, KeyAction, MouseAction, MouseButton, PanelId, WindowSlot};
 use crate::ui::panels::{PanelContext, PanelNode, RenderContext, UiContext};
 use ratatui::prelude::*;
 
@@ -119,6 +119,42 @@ impl WindowManager {
         }
     }
 
+    pub fn dispatch_mouse(&mut self, mouse: MouseAction, area: Rect, ctx: &UiContext<'_>) -> Vec<Effect> {
+        self.normalize_focus(ctx);
+
+        let Some(placement) = self.hit_test(area, ctx, mouse.column(), mouse.row()) else {
+            return Vec::new();
+        };
+
+        let panel_ctx = PanelContext {
+            exec_state: ctx.exec_state,
+        };
+        let focus_clicked_panel = matches!(
+            mouse,
+            MouseAction::Down {
+                button: MouseButton::Left,
+                ..
+            }
+        );
+
+        let Some(panel) = self
+            .panels
+            .iter_mut()
+            .find(|panel| panel.id() == placement.id)
+        else {
+            return Vec::new();
+        };
+
+        if focus_clicked_panel && panel.focusable(ctx) {
+            self.focus.current = placement.id;
+        }
+
+        match panel.handle_mouse(mouse, placement.area, &panel_ctx) {
+            DispatchResult::Ignored => Vec::new(),
+            DispatchResult::Consumed(effects) => effects,
+        }
+    }
+
     pub fn render(&self, frame: &mut Frame, ctx: &RenderContext<'_>) {
         let placements = self.layout(frame.area(), &UiContext {
             exec_state: ctx.exec_state,
@@ -210,6 +246,13 @@ impl WindowManager {
         placements.sort_by_key(|placement| placement.z_index);
         placements
     }
+
+    fn hit_test(&self, area: Rect, ctx: &UiContext<'_>, column: u16, row: u16) -> Option<WindowPlacement> {
+        self.layout(area, ctx)
+            .into_iter()
+            .rev()
+            .find(|placement| rect_contains(placement.area, column, row))
+    }
 }
 
 fn slot_rank(slot: WindowSlot) -> u8 {
@@ -252,10 +295,40 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
+trait MouseLocation {
+    fn column(&self) -> u16;
+    fn row(&self) -> u16;
+}
+
+impl MouseLocation for MouseAction {
+    fn column(&self) -> u16 {
+        match self {
+            MouseAction::Down { column, .. }
+            | MouseAction::ScrollUp { column, .. }
+            | MouseAction::ScrollDown { column, .. } => *column,
+        }
+    }
+
+    fn row(&self) -> u16 {
+        match self {
+            MouseAction::Down { row, .. }
+            | MouseAction::ScrollUp { row, .. }
+            | MouseAction::ScrollDown { row, .. } => *row,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::events::{ExecState, PanelId};
+    use crate::ui::events::{ExecState, MouseAction, MouseButton, PanelId};
     use crate::ui::panels::{ContentPanel, InputPanel, RuntimeSnapshot, SidebarPanel, StatusBarPanel};
     use crate::ui::statusbar::StatusBarState;
 
@@ -345,5 +418,27 @@ mod tests {
 
         assert_eq!(status.area.y + status.area.height, 30);
         assert_eq!(input.area.y + input.area.height, status.area.y);
+    }
+
+    #[test]
+    fn mouse_click_switches_focus_to_clicked_panel() {
+        let mut manager = WindowManager::new(vec![
+            PanelNode::Content(ContentPanel::new(Vec::new())),
+            PanelNode::Input(InputPanel::new()),
+            PanelNode::Sidebar(SidebarPanel::new()),
+            PanelNode::StatusBar(StatusBarPanel::new()),
+        ]);
+
+        manager.dispatch_mouse(
+            MouseAction::Down {
+                button: MouseButton::Left,
+                column: 10,
+                row: 3,
+            },
+            Rect::new(0, 0, 100, 30),
+            &ui_context(false),
+        );
+
+        assert_eq!(manager.focus(), PanelId::Content);
     }
 }

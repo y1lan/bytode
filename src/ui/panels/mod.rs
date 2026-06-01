@@ -11,7 +11,7 @@ pub use input::InputPanel;
 pub use sidebar::SidebarPanel;
 pub use status_bar::StatusBarPanel;
 
-use crate::ui::events::{DispatchResult, ExecState, KeyAction, PanelId, WindowSpec};
+use crate::ui::events::{DispatchResult, ExecState, KeyAction, MouseAction, PanelId, WindowSpec};
 use crate::ui::statusbar::StatusBarState;
 use ratatui::prelude::*;
 
@@ -100,6 +100,20 @@ impl PanelNode {
             PanelNode::Input(panel) => panel.handle_key(key, ctx),
             PanelNode::Sidebar(panel) => panel.handle_key(key, ctx),
             PanelNode::StatusBar(panel) => panel.handle_key(key, ctx),
+        }
+    }
+
+    pub fn handle_mouse(
+        &mut self,
+        mouse: MouseAction,
+        area: Rect,
+        ctx: &PanelContext<'_>,
+    ) -> DispatchResult {
+        match self {
+            PanelNode::Content(panel) => panel.handle_mouse(mouse, area, ctx),
+            PanelNode::Input(panel) => panel.handle_mouse(mouse, area, ctx),
+            PanelNode::Sidebar(panel) => panel.handle_mouse(mouse, area, ctx),
+            PanelNode::StatusBar(panel) => panel.handle_mouse(mouse, area, ctx),
         }
     }
 

@@ -1,7 +1,7 @@
 use crate::agent::Agent;
 use crate::project::ProjectProfile;
 use crate::ui::app_shell::AppShell;
-use crate::ui::events::{Effect, KeyAction, TurnId};
+use crate::ui::events::{Effect, KeyAction, MouseAction, TurnId};
 use crate::ui::panels::HistoryEntry;
 use crate::ui::Terminal;
 use crossterm::event::Event;
@@ -68,12 +68,17 @@ async fn run_inner(
             shell.sync_runtime_from_agent(agent, elapsed_fmt(last_msg), spinner_char());
         }
 
+        let mut frame_area = None;
         if let Ok(mut terminal) = terminal.lock() {
-            let _ = terminal.draw(|frame| shell.render(frame));
+            let Ok(frame) = terminal.draw(|frame| shell.render(frame)) else {
+                continue;
+            };
+            frame_area = Some(frame.area);
         }
 
         if process_key_actions_for_budget(
             &mut shell,
+            frame_area,
             &mut agent_opt,
             &mut rx,
             &mut turn_handle,
@@ -135,6 +140,7 @@ async fn run_inner(
 
 fn process_key_actions_for_budget(
     shell: &mut AppShell,
+    frame_area: Option<ratatui::layout::Rect>,
     agent_opt: &mut Option<Agent>,
     rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>,
     turn_handle: &mut Option<tokio::task::JoinHandle<(TurnId, Agent, Option<String>)>>,
@@ -155,22 +161,34 @@ fn process_key_actions_for_budget(
         let Ok(event) = crossterm::event::read() else {
             return false;
         };
-        if let Event::Key(key_event) = event {
-            let Some(action) = KeyAction::from_key_event(key_event) else {
-                continue;
-            };
-            let effects = shell.dispatch_key(action);
-            if apply_effects(
-                effects,
-                shell,
-                agent_opt,
-                rx,
-                turn_handle,
-                active_cancel,
-                last_msg,
-            ) {
-                return true;
+        let effects = match event {
+            Event::Key(key_event) => {
+                let Some(action) = KeyAction::from_key_event(key_event) else {
+                    continue;
+                };
+                shell.dispatch_key(action)
             }
+            Event::Mouse(mouse_event) => {
+                let Some(action) = MouseAction::from_mouse_event(mouse_event) else {
+                    continue;
+                };
+                let Some(area) = frame_area else {
+                    continue;
+                };
+                shell.dispatch_mouse(action, area)
+            }
+            _ => continue,
+        };
+        if apply_effects(
+            effects,
+            shell,
+            agent_opt,
+            rx,
+            turn_handle,
+            active_cancel,
+            last_msg,
+        ) {
+            return true;
         }
 
         if started.elapsed() >= INPUT_BUDGET {

@@ -8,6 +8,7 @@ pub mod window_manager;
 
 use crossterm::{
     execute,
+    event::{DisableMouseCapture, EnableMouseCapture},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
@@ -20,7 +21,7 @@ pub struct Terminal {
 impl Terminal {
     pub fn init() -> io::Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(io::stdout());
         let terminal = ratatui::Terminal::new(backend)?;
         Ok(Terminal { terminal })
@@ -35,7 +36,7 @@ impl Terminal {
 
     pub fn restore() -> io::Result<()> {
         disable_raw_mode()?;
-        execute!(io::stdout(), LeaveAlternateScreen)?;
+        execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
         Ok(())
     }
 }
