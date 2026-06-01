@@ -5,7 +5,7 @@ use crate::ui::events::{Effect, KeyAction, TurnId};
 use crate::ui::panels::HistoryEntry;
 use crate::ui::Terminal;
 use crossterm::event::Event;
-use futures::{FutureExt, StreamExt};
+use futures::FutureExt;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -58,7 +58,6 @@ async fn run_inner(
         chat_history_init,
     );
     let mut agent_opt = Some(agent);
-    let mut events = crossterm::event::EventStream::new();
     let mut rx: Option<mpsc::UnboundedReceiver<StreamEvent>> = None;
     let mut turn_handle: Option<tokio::task::JoinHandle<(TurnId, Agent, Option<String>)>> = None;
     let mut active_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
@@ -71,6 +70,20 @@ async fn run_inner(
 
         if let Ok(mut terminal) = terminal.lock() {
             let _ = terminal.draw(|frame| shell.render(frame));
+        }
+
+        if process_key_actions_for_budget(
+            &mut shell,
+            &mut agent_opt,
+            &mut rx,
+            &mut turn_handle,
+            &mut active_cancel,
+            &mut last_msg,
+        ) {
+            if let Some(agent) = agent_opt.take() {
+                return agent;
+            }
+            std::process::exit(0);
         }
 
         tokio::select! {
@@ -115,60 +128,121 @@ async fn run_inner(
                     }
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
-            event = events.next() => {
-                let Some(Ok(Event::Key(key_event))) = event else {
-                    continue;
-                };
-                let Some(action) = KeyAction::from_key_event(key_event) else {
-                    continue;
-                };
-                let effects = shell.dispatch_key(action);
-                for effect in effects {
-                    shell.apply_effect(&effect);
-                    match effect {
-                        Effect::Exit => {
-                            Terminal::restore().ok();
-                            if let Some(agent) = agent_opt.take() {
-                                return agent;
-                            }
-                            std::process::exit(0);
-                        }
-                        Effect::StartTurn { turn_id, input } => {
-                            start_turn(
-                                turn_id,
-                                input,
-                                &mut shell,
-                                &mut agent_opt,
-                                &mut rx,
-                                &mut turn_handle,
-                                &mut active_cancel,
-                                &mut last_msg,
-                            );
-                        }
-                        Effect::CancelTurn(turn_id) => {
-                            if shell.active_turn_id() == Some(turn_id) {
-                                if let Some(cancel) = active_cancel.as_ref() {
-                                    cancel.store(true, Ordering::Relaxed);
-                                }
-                            }
-                        }
-                        Effect::HandleSlashCommand(command) => {
-                            if let Some(agent) = agent_opt.as_mut() {
-                                shell.apply_slash_command(&command, agent);
-                            }
-                        }
-                        Effect::ApproveTool(_)
-                        | Effect::RejectTool(_)
-                        | Effect::SwitchContentView(_)
-                        | Effect::OpenOverlay(_)
-                        | Effect::CloseOverlay(_)
-                        | Effect::SaveSession
-                        | Effect::RestoreTerminal
-                        | Effect::ShowNotice(_) => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(16)) => {}
+        }
+    }
+}
+
+fn process_key_actions_for_budget(
+    shell: &mut AppShell,
+    agent_opt: &mut Option<Agent>,
+    rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>,
+    turn_handle: &mut Option<tokio::task::JoinHandle<(TurnId, Agent, Option<String>)>>,
+    active_cancel: &mut Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    last_msg: &mut Option<std::time::Instant>,
+) -> bool {
+    const INPUT_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+    let started = std::time::Instant::now();
+
+    loop {
+        let Ok(has_event) = crossterm::event::poll(std::time::Duration::from_millis(0)) else {
+            return false;
+        };
+        if !has_event {
+            return false;
+        }
+
+        let Ok(event) = crossterm::event::read() else {
+            return false;
+        };
+        if let Event::Key(key_event) = event {
+            let Some(action) = KeyAction::from_key_event(key_event) else {
+                continue;
+            };
+            let effects = shell.dispatch_key(action);
+            if apply_effects(
+                effects,
+                shell,
+                agent_opt,
+                rx,
+                turn_handle,
+                active_cancel,
+                last_msg,
+            ) {
+                return true;
+            }
+        }
+
+        if started.elapsed() >= INPUT_BUDGET {
+            discard_pending_events();
+            return false;
+        }
+    }
+}
+
+fn apply_effects(
+    effects: Vec<Effect>,
+    shell: &mut AppShell,
+    agent_opt: &mut Option<Agent>,
+    rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>,
+    turn_handle: &mut Option<tokio::task::JoinHandle<(TurnId, Agent, Option<String>)>>,
+    active_cancel: &mut Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    last_msg: &mut Option<std::time::Instant>,
+) -> bool {
+    for effect in effects {
+        shell.apply_effect(&effect);
+        match effect {
+            Effect::Exit => {
+                Terminal::restore().ok();
+                return true;
+            }
+            Effect::StartTurn { turn_id, input } => {
+                start_turn(
+                    turn_id,
+                    input,
+                    shell,
+                    agent_opt,
+                    rx,
+                    turn_handle,
+                    active_cancel,
+                    last_msg,
+                );
+            }
+            Effect::CancelTurn(turn_id) => {
+                if shell.active_turn_id() == Some(turn_id) {
+                    if let Some(cancel) = active_cancel.as_ref() {
+                        cancel.store(true, Ordering::Relaxed);
                     }
                 }
             }
+            Effect::HandleSlashCommand(command) => {
+                if let Some(agent) = agent_opt.as_mut() {
+                    shell.apply_slash_command(&command, agent);
+                }
+            }
+            Effect::ApproveTool(_)
+            | Effect::RejectTool(_)
+            | Effect::SwitchContentView(_)
+            | Effect::OpenOverlay(_)
+            | Effect::CloseOverlay(_)
+            | Effect::SaveSession
+            | Effect::RestoreTerminal
+            | Effect::ShowNotice(_) => {}
+        }
+    }
+    false
+}
+
+fn discard_pending_events() {
+    loop {
+        let Ok(has_event) = crossterm::event::poll(std::time::Duration::from_millis(0)) else {
+            return;
+        };
+        if !has_event {
+            return;
+        }
+        if crossterm::event::read().is_err() {
+            return;
         }
     }
 }
