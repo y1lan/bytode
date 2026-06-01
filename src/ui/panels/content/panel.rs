@@ -185,10 +185,10 @@ impl ContentPanel {
             if !all.is_empty() {
                 all.push(blank_line(width));
             }
-            // Stream raw text directly so every arriving chunk is immediately visible.
-            // We only parse into structured tool/text blocks once the turn finalizes.
-            let streaming =
-                HistoryEntry::Assistant(AssistantMessage::from_text(self.streaming_visible.clone()));
+            let streaming = HistoryEntry::Assistant(parse_assistant_message(
+                &self.streaming_visible,
+                stream_tool_state(Some(_exec_state)),
+            ));
             render_history_entry(&streaming, width, &mut all);
         }
 
@@ -336,5 +336,20 @@ mod tests {
         assert!(!joined.contains("line 1"));
         assert!(joined.contains("line 2"));
         assert!(joined.contains("line 3"));
+    }
+
+    #[test]
+    fn streaming_read_file_renders_as_block_with_body() {
+        let mut panel = ContentPanel::new(Vec::new());
+        let exec_state = ExecState::Streaming { turn_id: 1 };
+
+        panel.begin_stream();
+        panel.append_stream_chunk(
+            "  ⟳ read_file(/home/aromatic/Applications/OwnProject/bytode/src/tools/file.rs)\n   1 | use crate::error::{BytodeError, Result};\n   2 | use crate::tools::{Tool, ToolResult};\n",
+        );
+
+        let lines = panel.rendered_text_for_test(6, 120, &exec_state);
+        assert!(lines.iter().any(|line| line.contains("read_file")));
+        assert!(lines.iter().any(|line| line.contains("1 | use crate::error")));
     }
 }

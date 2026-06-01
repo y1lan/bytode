@@ -191,16 +191,25 @@ fn choose_tool_presentation(
     body: Option<&str>,
     state: ToolState,
 ) -> ToolPresentation {
-    if state == ToolState::Running || state == ToolState::WaitingApproval {
+    if state == ToolState::WaitingApproval {
         return ToolPresentation::Inline;
     }
 
     let name = tool_name_from_summary(summary);
     if matches!(
         name.as_str(),
-        "cargo" | "cargo_check" | "get_diagnostics" | "write_file"
+        "cargo" | "cargo_check" | "get_diagnostics" | "write_file" | "read_file"
     ) {
-        return ToolPresentation::Block;
+        if body.is_some() {
+            return ToolPresentation::Block;
+        }
+    }
+
+    if state == ToolState::Running {
+        if body.is_some() {
+            return ToolPresentation::Block;
+        }
+        return ToolPresentation::Inline;
     }
 
     let Some(body) = body else {
@@ -234,6 +243,20 @@ mod tests {
         let message = parse_assistant_message(
             "  ⟳ write_file(src/main.rs)\n+ fn main() {}\n- fn old() {}\n",
             ToolState::Completed,
+        );
+
+        let AssistantPart::Tool(part) = &message.parts[0] else {
+            panic!("expected tool part");
+        };
+
+        assert_eq!(part.presentation, ToolPresentation::Block);
+    }
+
+    #[test]
+    fn keeps_read_file_streaming_output_as_block() {
+        let message = parse_assistant_message(
+            "  ⟳ read_file(src/main.rs)\n   1 | fn main() {}\n",
+            ToolState::Running,
         );
 
         let AssistantPart::Tool(part) = &message.parts[0] else {
