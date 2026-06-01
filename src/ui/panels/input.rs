@@ -97,6 +97,10 @@ impl InputPanel {
         self.notice = None;
     }
 
+    pub(crate) fn notice_text(&self) -> Option<&str> {
+        self.pending.as_deref().or(self.notice.as_deref())
+    }
+
     fn pending_notice_line(&self) -> Option<Line<'static>> {
         if let Some(pending) = &self.pending {
             return Some(Line::from(Span::styled(

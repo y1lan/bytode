@@ -1,6 +1,7 @@
 use crate::agent::{Agent, AgentMode};
 use crate::project::ProjectProfile;
-use crate::ui::events::{Effect, ExecState, KeyAction, PanelId, TurnId};
+use crate::ui::events::{Effect, ExecState, KeyAction, OverlayId, OverlayState, PanelId, TurnId, WindowSlot};
+use crate::ui::overlays::OverlayStack;
 use crate::ui::panels::{
     ContentPanel, HistoryEntry, InputPanel, PanelNode, RenderContext, RuntimeSnapshot,
     SidebarPanel, StatusBarPanel, UiContext,
@@ -11,6 +12,7 @@ use ratatui::prelude::*;
 
 pub struct AppShell {
     window_manager: WindowManager,
+    overlays: OverlayStack,
     exec_state: ExecState,
     runtime: RuntimeSnapshot,
     sidebar_visible: bool,
@@ -68,6 +70,7 @@ impl AppShell {
 
         let mut shell = Self {
             window_manager: WindowManager::new(panels),
+            overlays: OverlayStack::new(),
             exec_state: ExecState::Idle,
             runtime,
             sidebar_visible: false,
@@ -100,14 +103,23 @@ impl AppShell {
             focused: Some(self.window_manager.focus()),
         };
         self.window_manager.render(frame, &ctx);
+        self.overlays.render(frame, &ctx);
     }
 
     pub fn dispatch_key(&mut self, key: KeyAction) -> Vec<Effect> {
+        if let Some(effects) = self.overlays.handle_modal_key(key.clone()) {
+            return effects;
+        }
+
         if let Some(effects) = self.route_global_key(&key) {
             return effects;
         }
 
         if let Some(effects) = self.route_cancel_intent(&key) {
+            return effects;
+        }
+
+        if let Some(effects) = self.overlays.handle_capture_key(key.clone()) {
             return effects;
         }
 
@@ -166,8 +178,8 @@ impl AppShell {
         self.exec_state = ExecState::Idle;
         self.runtime.status.task.clear();
         self.content_panel_mut().finalize_stream();
-        self.content_panel_mut().push_error(message);
-        self.input_panel_mut().clear_notice();
+        self.content_panel_mut().push_error(message.clone());
+        self.show_notice(message);
     }
 
     pub fn mark_cancel_requested(&mut self, turn_id: TurnId) {
@@ -232,6 +244,31 @@ impl AppShell {
             }
         }
         self.input_panel_mut().clear_notice();
+    }
+
+    pub fn apply_effect(&mut self, effect: &Effect) {
+        match effect {
+            Effect::ShowNotice(notice) => self.show_notice(notice.clone()),
+            Effect::OpenOverlay(state) => self.overlays.open(state.clone()),
+            Effect::CloseOverlay(id) => self.overlays.close(*id),
+            Effect::SwitchContentView(view) => {
+                self.show_notice(format!("content view {:?} not implemented", view));
+            }
+            Effect::ApproveTool(request) => {
+                self.overlays.open(OverlayState {
+                    id: OverlayId::Dialog,
+                    title: "Approval".into(),
+                    body: format!("Approval requested for:\n\n{request}\n\nPress Enter to close."),
+                    z_index: 10,
+                    slot: WindowSlot::Center,
+                    modal: true,
+                    capture: true,
+                });
+            }
+            Effect::RejectTool(request) => self.show_notice(format!("rejected: {request}")),
+            Effect::SaveSession | Effect::RestoreTerminal | Effect::Exit | Effect::StartTurn { .. }
+            | Effect::CancelTurn(_) | Effect::HandleSlashCommand(_) => {}
+        }
     }
 
     pub fn take_pending_input(&mut self) -> Option<String> {
@@ -320,6 +357,10 @@ impl AppShell {
             .and_then(PanelNode::as_input_mut)
             .expect("input panel missing")
     }
+
+    fn show_notice(&mut self, notice: String) {
+        self.input_panel_mut().set_notice(notice);
+    }
 }
 
 enum SlashCommand {
@@ -395,5 +436,32 @@ mod tests {
         let effects = shell.dispatch_key(KeyAction::CtrlC);
         assert_eq!(effects, vec![Effect::CancelTurn(7)]);
         assert!(matches!(shell.exec_state, ExecState::Cancelling { turn_id: 7 }));
+    }
+
+    #[test]
+    fn modal_overlay_blocks_global_key_routing() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        shell.apply_effect(&Effect::OpenOverlay(OverlayState {
+            id: OverlayId::Dialog,
+            title: "Modal".into(),
+            body: "Body".into(),
+            z_index: 10,
+            slot: WindowSlot::Center,
+            modal: true,
+            capture: true,
+        }));
+
+        let effects = shell.dispatch_key(KeyAction::CtrlT);
+        assert!(effects.is_empty());
+        assert!(!shell.sidebar_visible);
+    }
+
+    #[test]
+    fn show_notice_updates_input_panel_state() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        shell.apply_effect(&Effect::ShowNotice("still streaming".into()));
+
+        let input = shell.input_panel_mut();
+        assert_eq!(input.notice_text(), Some("still streaming"));
     }
 }

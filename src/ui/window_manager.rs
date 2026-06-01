@@ -1,7 +1,6 @@
 use crate::ui::events::{DispatchResult, Effect, KeyAction, PanelId, WindowSlot};
 use crate::ui::panels::{PanelContext, PanelNode, RenderContext, UiContext};
 use ratatui::prelude::*;
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FocusState {
@@ -35,11 +34,17 @@ impl WindowManager {
     }
 
     pub fn focusable_windows(&self, ctx: &UiContext<'_>) -> Vec<PanelId> {
-        self.panels
+        let mut windows = self
+            .panels
             .iter()
             .filter(|panel| panel.visible(ctx) && panel.focusable(ctx))
-            .map(PanelNode::id)
-            .collect()
+            .map(|panel| {
+                let spec = panel.window_spec(ctx);
+                (panel.id(), spec.z_index, focus_rank(panel.id()))
+            })
+            .collect::<Vec<_>>();
+        windows.sort_by_key(|(_, z_index, focus)| (std::cmp::Reverse(*z_index), *focus));
+        windows.into_iter().map(|(id, _, _)| id).collect()
     }
 
     pub fn normalize_focus(&mut self, ctx: &UiContext<'_>) {
@@ -121,19 +126,11 @@ impl WindowManager {
             sidebar_visible: ctx.sidebar_visible,
         });
 
-        let areas: HashMap<PanelId, WindowPlacement> = placements
-            .iter()
-            .copied()
-            .map(|placement| (placement.id, placement))
-            .collect();
-
         for placement in placements {
             if let Some(panel) = self.panels.iter().find(|panel| panel.id() == placement.id) {
                 panel.render(frame, placement.area, ctx);
             }
         }
-
-        let _ = areas;
     }
 
     pub fn panel_mut(&mut self, id: PanelId) -> Option<&mut PanelNode> {
@@ -235,6 +232,15 @@ fn slot_member_rank(slot: WindowSlot, id: PanelId) -> u8 {
     }
 }
 
+fn focus_rank(id: PanelId) -> u8 {
+    match id {
+        PanelId::Input => 0,
+        PanelId::Content => 1,
+        PanelId::Sidebar => 2,
+        PanelId::StatusBar => 3,
+    }
+}
+
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     let popup_width = width.min(area.width);
     let popup_height = height.min(area.height);
@@ -311,8 +317,10 @@ mod tests {
         ]);
 
         manager.cycle_focus(false, &ui_context(true));
-        assert_eq!(manager.focus(), PanelId::Sidebar);
+        assert_eq!(manager.focus(), PanelId::Content);
         manager.cycle_focus(false, &ui_context(false));
+        assert_eq!(manager.focus(), PanelId::Input);
+        manager.normalize_focus(&ui_context(false));
         assert_eq!(manager.focus(), PanelId::Input);
     }
 

@@ -10,6 +10,11 @@ pub enum PanelId {
     StatusBar,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OverlayId {
+    Dialog,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowSlot {
     Left,
@@ -27,6 +32,26 @@ pub struct WindowSpec {
     pub z_index: i16,
     pub slot: WindowSlot,
     pub size: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContentView {
+    Chat,
+    Diff,
+    FilePreview,
+    Diagnostics,
+    ToolLog,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlayState {
+    pub id: OverlayId,
+    pub title: String,
+    pub body: String,
+    pub z_index: i16,
+    pub slot: WindowSlot,
+    pub modal: bool,
+    pub capture: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,6 +138,13 @@ pub enum Effect {
     Exit,
     StartTurn { turn_id: TurnId, input: String },
     CancelTurn(TurnId),
+    ApproveTool(String),
+    RejectTool(String),
+    SwitchContentView(ContentView),
+    OpenOverlay(OverlayState),
+    CloseOverlay(OverlayId),
+    SaveSession,
+    RestoreTerminal,
     HandleSlashCommand(String),
     ShowNotice(String),
 }

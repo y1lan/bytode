@@ -121,6 +121,7 @@ async fn run_inner(
                 };
                 let effects = shell.dispatch_key(action);
                 for effect in effects {
+                    shell.apply_effect(&effect);
                     match effect {
                         Effect::Exit => {
                             Terminal::restore().ok();
@@ -153,7 +154,14 @@ async fn run_inner(
                                 shell.apply_slash_command(&command, agent);
                             }
                         }
-                        Effect::ShowNotice(_notice) => {}
+                        Effect::ApproveTool(_)
+                        | Effect::RejectTool(_)
+                        | Effect::SwitchContentView(_)
+                        | Effect::OpenOverlay(_)
+                        | Effect::CloseOverlay(_)
+                        | Effect::SaveSession
+                        | Effect::RestoreTerminal
+                        | Effect::ShowNotice(_) => {}
                     }
                 }
             }

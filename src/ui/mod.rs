@@ -1,5 +1,6 @@
 pub mod app_shell;
 pub mod events;
+pub mod overlays;
 pub mod panels;
 pub mod render;
 pub mod statusbar;
