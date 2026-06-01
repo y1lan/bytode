@@ -25,7 +25,7 @@ impl SidebarPanel {
     }
 
     pub fn window_spec(&self, _ctx: &UiContext<'_>) -> WindowSpec {
-        WindowSpec { id: self.id(), z_index: 0, slot: WindowSlot::Right, size: 28 }
+        WindowSpec { id: self.id(), z_index: 0, slot: WindowSlot::Right, size: 24 }
     }
 
     pub fn handle_key(&mut self, key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {

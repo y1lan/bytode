@@ -147,7 +147,13 @@ impl WindowManager {
             .filter(|panel| panel.visible(ctx))
             .map(|panel| panel.window_spec(ctx))
             .collect::<Vec<_>>();
-        visible_specs.sort_by_key(|spec| (spec.z_index, slot_rank(spec.slot)));
+        visible_specs.sort_by_key(|spec| {
+            (
+                spec.z_index,
+                slot_rank(spec.slot),
+                slot_member_rank(spec.slot, spec.id),
+            )
+        });
 
         let mut placements = Vec::new();
         let mut current_layer = i16::MIN;
@@ -218,6 +224,14 @@ fn slot_rank(slot: WindowSlot) -> u8 {
         WindowSlot::Content => 4,
         WindowSlot::Center => 5,
         WindowSlot::AroundInput => 6,
+    }
+}
+
+fn slot_member_rank(slot: WindowSlot, id: PanelId) -> u8 {
+    match (slot, id) {
+        (WindowSlot::Bottom, PanelId::StatusBar) => 0,
+        (WindowSlot::Bottom, PanelId::Input) => 1,
+        _ => 0,
     }
 }
 
@@ -300,5 +314,28 @@ mod tests {
         assert_eq!(manager.focus(), PanelId::Sidebar);
         manager.cycle_focus(false, &ui_context(false));
         assert_eq!(manager.focus(), PanelId::Input);
+    }
+
+    #[test]
+    fn status_bar_stays_below_input() {
+        let manager = WindowManager::new(vec![
+            PanelNode::Content(ContentPanel::new(Vec::new())),
+            PanelNode::Input(InputPanel::new()),
+            PanelNode::Sidebar(SidebarPanel::new()),
+            PanelNode::StatusBar(StatusBarPanel::new()),
+        ]);
+
+        let placements = manager.layout(Rect::new(0, 0, 100, 30), &ui_context(false));
+        let input = placements
+            .iter()
+            .find(|placement| placement.id == PanelId::Input)
+            .expect("input placement");
+        let status = placements
+            .iter()
+            .find(|placement| placement.id == PanelId::StatusBar)
+            .expect("status placement");
+
+        assert_eq!(status.area.y + status.area.height, 30);
+        assert_eq!(input.area.y + input.area.height, status.area.y);
     }
 }

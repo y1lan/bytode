@@ -82,7 +82,7 @@ impl InputPanel {
             inner.width,
             inner.height.saturating_sub(offset).max(1),
         );
-        render::user_input(frame, input_area, &self.input);
+        render::render_input(frame, input_area, &self.input);
     }
 
     pub fn take_pending(&mut self) -> Option<String> {
