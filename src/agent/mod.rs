@@ -5,6 +5,10 @@ use crate::error::Result;
 use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
 use crate::project::ProjectProfile;
 use crate::tools::{ToolRegistry, ToolResult};
+use crate::ui::panels::{
+    AssistantMessage, AssistantPart, HistoryEntry, TextPart, ToolPart, ToolPresentation,
+    ToolState, UserMessage,
+};
 use context::ContextBuilder;
 use memory::{MemoryLayer, SessionData, Turn};
 use std::collections::HashSet;
@@ -68,6 +72,10 @@ impl Agent {
 
     pub fn cancel_token(&self) -> Arc<AtomicBool> {
         self.cancelled.clone()
+    }
+
+    pub fn reset_cancelled(&self) {
+        self.cancelled.store(false, Ordering::Relaxed);
     }
 
     /// Run a turn with SSE streaming — `on_text` is called for each token chunk
@@ -259,19 +267,38 @@ impl Agent {
         Ok(())
     }
 
-    /// Reconstruct chat history text from loaded turns for UI display
-    pub fn chat_history_text(&self) -> Vec<String> {
-        self.context.memory.recent_turns().iter().filter_map(|t| {
-            let mut entries = Vec::new();
-            if let Some(ref input) = t.user_input {
-                entries.push(format!("\u{25b8} {}", input));
+    pub fn chat_history_entries(&self) -> Vec<HistoryEntry> {
+        let mut entries = Vec::new();
+
+        for turn in self.context.memory.recent_turns() {
+            if let Some(input) = &turn.user_input {
+                entries.push(HistoryEntry::User(UserMessage {
+                    body: input.clone(),
+                    meta: None,
+                }));
             }
-            if let Some(ref text) = t.assistant_text
-                && !text.is_empty() {
-                    entries.push(text.clone());
-                }
-            if entries.is_empty() { None } else { Some(entries.join("\n")) }
-        }).collect()
+
+            let mut parts = turn
+                .tool_calls
+                .iter()
+                .map(history_tool_part)
+                .map(AssistantPart::Tool)
+                .collect::<Vec<_>>();
+
+            if let Some(text) = &turn.assistant_text
+                && !text.trim().is_empty()
+            {
+                parts.push(AssistantPart::Text(TextPart {
+                    content: text.clone(),
+                }));
+            }
+
+            if !parts.is_empty() {
+                entries.push(HistoryEntry::Assistant(AssistantMessage { parts }));
+            }
+        }
+
+        entries
     }
 }
 
@@ -353,5 +380,113 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
             if parts.is_empty() { "origin".into() } else { parts.join(", ") }
         }
         _ => "?".into(),
+    }
+}
+
+fn history_tool_part(record: &memory::ToolCallRecord) -> ToolPart {
+    let summary = format!("{} {}", record.name, format_args(&record.name, &record.arguments))
+        .trim()
+        .to_string();
+    let state = if record.is_error() {
+        ToolState::Failed
+    } else {
+        ToolState::Completed
+    };
+    let body = history_tool_body(&record.result);
+    let presentation = history_tool_presentation(&record.name, body.as_deref());
+    let collapsed = body
+        .as_deref()
+        .map(|content| content.lines().count() > 6)
+        .unwrap_or(false);
+
+    ToolPart {
+        name: record.name.clone(),
+        summary,
+        body,
+        state,
+        presentation,
+        collapsed,
+    }
+}
+
+fn history_tool_body(result: &ToolResult) -> Option<String> {
+    match result {
+        ToolResult::FileContent { path, content, line_count, .. } => Some(format!(
+            "{}\n{} lines\n{}",
+            path, line_count, content
+        )),
+        ToolResult::Diagnostics {
+            total,
+            errors,
+            warnings,
+            list,
+            ..
+        } => {
+            let mut lines = vec![format!(
+                "diagnostics: total={} errors={} warnings={}",
+                total, errors, warnings
+            )];
+            lines.extend(list.iter().take(8).map(|item| {
+                format!(
+                    "{}:{} {} {}",
+                    item.file, item.line, item.severity, item.message
+                )
+            }));
+            Some(lines.join("\n"))
+        }
+        ToolResult::Json {
+            tool,
+            count,
+            data,
+            ..
+        } => {
+            let preview = data
+                .iter()
+                .take(6)
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(format!("{tool}: {count} item(s)\n{preview}"))
+        }
+        ToolResult::Matches {
+            pattern,
+            count,
+            items,
+            truncated,
+        } => {
+            let mut lines = vec![format!("pattern={pattern} count={count}")];
+            lines.extend(items.iter().take(8).map(|item| {
+                format!("{}:{} {}", item.file, item.line, item.text)
+            }));
+            if *truncated {
+                lines.push("...".into());
+            }
+            Some(lines.join("\n"))
+        }
+        ToolResult::WriteConfirmation { path, bytes_written, lines, diff } => Some(format!(
+            "{}\n{} bytes, {} lines\n{}",
+            path, bytes_written, lines, diff
+        )),
+        ToolResult::Text { content, .. } => Some(content.clone()),
+    }
+}
+
+fn history_tool_presentation(name: &str, body: Option<&str>) -> ToolPresentation {
+    if matches!(name, "write_file" | "cargo" | "cargo_check" | "get_diagnostics") {
+        return ToolPresentation::Block;
+    }
+
+    let Some(body) = body else {
+        return ToolPresentation::Inline;
+    };
+
+    if body.contains("```")
+        || body.lines().count() > 4
+        || body.lines().any(|line| line.starts_with('+') || line.starts_with('-') || line.contains(" | "))
+        || body.len() > 160
+    {
+        ToolPresentation::Block
+    } else {
+        ToolPresentation::Inline
     }
 }

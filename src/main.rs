@@ -33,6 +33,7 @@ use tools::{
     web::SearchWebTool,
     ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
 };
+use ui::panels::HistoryEntry;
 
 #[derive(Parser)]
 #[command(name = "bytode", about = "Terminal coding agent")]
@@ -176,7 +177,7 @@ async fn main() -> Result<()> {
     let mut session_file = session_path(&project_root, &session_dir);
 
     // Session selection if in REPL mode
-    let mut chat_history_init: Vec<String> = Vec::new();
+    let mut chat_history_init: Vec<HistoryEntry> = Vec::new();
     if cli.task.is_none() {
         let sessions = session_list(&session_dir);
         if !sessions.is_empty() {
@@ -213,7 +214,7 @@ async fn main() -> Result<()> {
                 } else if let Some(s) = sessions.get(choice - 1) {
                     if agent.load_session(&s.path).is_ok() {
                         session_file = s.path.clone();
-                        chat_history_init = agent.chat_history_text();
+                        chat_history_init = agent.chat_history_entries();
                         eprintln!("Loaded session: {}\n", s.name);
                     } else {
                         eprintln!("Failed to load session\n");
