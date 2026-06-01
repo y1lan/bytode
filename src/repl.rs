@@ -9,6 +9,7 @@ use futures::{FutureExt, StreamExt};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
 pub async fn run(
     agent: Agent,
@@ -90,6 +91,8 @@ async fn run_inner(
                     Some((turn_id, agent, maybe_error)) => {
                         agent.reset_cancelled();
                         agent_opt = Some(agent);
+                        flush_stream_events(&mut shell, &mut rx);
+                        rx = None;
                         shell.finish_turn(turn_id);
                         if let Some(error) = maybe_error {
                             shell.record_runtime_error(error);
@@ -166,6 +169,22 @@ async fn run_inner(
                     }
                 }
             }
+        }
+    }
+}
+
+fn flush_stream_events(
+    shell: &mut AppShell,
+    rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>,
+) {
+    let Some(receiver) = rx.as_mut() else {
+        return;
+    };
+
+    loop {
+        match receiver.try_recv() {
+            Ok(event) => shell.append_stream_chunk(event.turn_id, &event.chunk),
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
         }
     }
 }
@@ -251,5 +270,50 @@ async fn join_turn(
     match handle.as_mut() {
         Some(handle) => handle.await.ok(),
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::{BuildSystem, Language, ProjectProfile};
+
+    fn profile() -> ProjectProfile {
+        ProjectProfile {
+            primary: Language::Rust,
+            build_system: BuildSystem::Cargo,
+            all_languages: vec![Language::Rust],
+            test_framework: None,
+            root: std::path::PathBuf::from("."),
+            source_dirs: vec![std::path::PathBuf::from("src")],
+            is_workspace: false,
+            workspace_members: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn flush_stream_events_drains_buffered_chunks() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        shell.start_turn(3, "hello");
+
+        let (tx, receiver) = mpsc::unbounded_channel();
+        tx.send(StreamEvent {
+            turn_id: 3,
+            chunk: "first".into(),
+        })
+        .unwrap();
+        tx.send(StreamEvent {
+            turn_id: 3,
+            chunk: " second".into(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let mut rx = Some(receiver);
+        flush_stream_events(&mut shell, &mut rx);
+        shell.finish_turn(3);
+
+        let rendered = shell.rendered_content_text_for_test(4, 80);
+        assert!(rendered.iter().any(|line| line.contains("first second")));
     }
 }

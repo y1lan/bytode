@@ -6,7 +6,7 @@ use crate::ui::panels::{
     panel_block, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, BG,
 };
 use ratatui::prelude::*;
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use std::cell::Cell;
 
 pub struct ContentPanel {
@@ -115,10 +115,15 @@ impl ContentPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let lines = self.flatten(inner.height as usize, inner.width as usize, ctx.exec_state);
+        let width = inner.width as usize;
+        let visible = inner.height as usize;
+        let lines = self.collect_lines(width, ctx.exec_state);
+        self.last_total_lines.set(lines.len());
+        self.last_visible_lines.set(visible);
+
         let paragraph = Paragraph::new(lines)
             .style(Style::default().fg(TXT).bg(BG))
-            .wrap(Wrap { trim: false });
+            .scroll((self.scroll_offset(self.last_total_lines.get(), visible) as u16, 0));
         frame.render_widget(paragraph, inner);
     }
 
@@ -131,16 +136,22 @@ impl ContentPanel {
     pub fn push_assistant(&mut self, text: String) {
         self.entries
             .push(HistoryEntry::Assistant(AssistantMessage::from_text(text)));
+        self.scroll = ScrollMode::Auto;
     }
 
     pub fn push_error(&mut self, text: String) {
         self.entries.push(HistoryEntry::Error(text));
+        self.scroll = ScrollMode::Auto;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll = ScrollMode::Auto;
     }
 
     pub fn begin_stream(&mut self) {
         self.stream_buffer.clear();
         self.streaming_visible.clear();
-        self.scroll = ScrollMode::Auto;
+        self.scroll_to_bottom();
     }
 
     pub fn append_stream_chunk(&mut self, chunk: &str) {
@@ -161,14 +172,7 @@ impl ContentPanel {
         )));
     }
 
-    fn flatten(&self, visible: usize, width: usize, exec_state: &ExecState) -> Vec<Line<'static>> {
-        let all = self.collect_lines(width, exec_state);
-        self.last_total_lines.set(all.len());
-        self.last_visible_lines.set(visible);
-        self.slice_visible_lines(all, visible)
-    }
-
-    fn collect_lines(&self, width: usize, exec_state: &ExecState) -> Vec<Line<'static>> {
+    fn collect_lines(&self, width: usize, _exec_state: &ExecState) -> Vec<Line<'static>> {
         let mut all = Vec::new();
         for (index, entry) in self.entries.iter().enumerate() {
             if index > 0 {
@@ -177,14 +181,14 @@ impl ContentPanel {
             render_history_entry(entry, width, &mut all);
         }
 
-        if !self.streaming_visible.trim().is_empty() {
+        if !self.streaming_visible.is_empty() {
             if !all.is_empty() {
                 all.push(blank_line(width));
             }
-            let streaming = HistoryEntry::Assistant(parse_assistant_message(
-                &self.streaming_visible,
-                stream_tool_state(Some(exec_state)),
-            ));
+            // Stream raw text directly so every arriving chunk is immediately visible.
+            // We only parse into structured tool/text blocks once the turn finalizes.
+            let streaming =
+                HistoryEntry::Assistant(AssistantMessage::from_text(self.streaming_visible.clone()));
             render_history_entry(&streaming, width, &mut all);
         }
 
@@ -200,17 +204,13 @@ impl ContentPanel {
         all
     }
 
-    fn slice_visible_lines(&self, all: Vec<Line<'static>>, visible: usize) -> Vec<Line<'static>> {
-        let total = all.len();
+    fn scroll_offset(&self, total_visual_lines: usize, visible: usize) -> usize {
+        let max_scroll = total_visual_lines.saturating_sub(visible);
         let skip = match self.scroll {
             ScrollMode::Auto => 0,
-            ScrollMode::Manual(lines) => lines.min(self.max_scroll().min(total.saturating_sub(1))),
+            ScrollMode::Manual(lines) => lines.min(max_scroll),
         };
-        let start = total.saturating_sub(skip.saturating_add(visible));
-        all.into_iter()
-            .skip(start)
-            .take(visible.saturating_add(skip))
-            .collect()
+        total_visual_lines.saturating_sub(skip.saturating_add(visible))
     }
 
     fn max_scroll(&self) -> usize {
@@ -218,12 +218,37 @@ impl ContentPanel {
             .get()
             .saturating_sub(self.last_visible_lines.get())
     }
+
+    #[cfg(test)]
+    pub(crate) fn rendered_text_for_test(
+        &self,
+        visible: usize,
+        width: usize,
+        exec_state: &ExecState,
+    ) -> Vec<String> {
+        let all = self.collect_lines(width, exec_state);
+        self.last_total_lines.set(all.len());
+        self.last_visible_lines.set(visible);
+        let start = self.scroll_offset(all.len(), visible);
+        all.into_iter()
+            .skip(start)
+            .take(visible)
+            .map(|line| line.to_string())
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::panels::AssistantPart;
+
+    fn idle_panel_ctx() -> PanelContext<'static> {
+        static EXEC_STATE: ExecState = ExecState::Idle;
+        PanelContext {
+            exec_state: &EXEC_STATE,
+        }
+    }
 
     #[test]
     fn finalize_stream_builds_structured_assistant_message() {
@@ -238,5 +263,78 @@ mod tests {
 
         assert!(matches!(message.parts[0], AssistantPart::Text(_)));
         assert!(matches!(message.parts[1], AssistantPart::Tool(_)));
+    }
+
+    #[test]
+    fn streaming_chunks_are_visible_before_finalize() {
+        let mut panel = ContentPanel::new(Vec::new());
+        let exec_state = ExecState::Streaming { turn_id: 1 };
+
+        panel.begin_stream();
+        panel.append_stream_chunk("hello");
+
+        let lines = panel.rendered_text_for_test(4, 80, &exec_state);
+        assert!(lines.iter().any(|line| line.contains("hello")));
+    }
+
+    #[test]
+    fn manual_scroll_stays_detached_until_user_returns_to_bottom() {
+        let mut panel = ContentPanel::new(Vec::new());
+        let exec_state = ExecState::Streaming { turn_id: 1 };
+
+        panel.begin_stream();
+        panel.append_stream_chunk("line 1\nline 2\nline 3\nline 4");
+
+        let _ = panel.rendered_text_for_test(2, 80, &exec_state);
+        let _ = panel.handle_key(KeyAction::Up, &idle_panel_ctx());
+
+        assert!(matches!(panel.scroll, ScrollMode::Manual(1)));
+
+        panel.append_stream_chunk("\nline 5");
+        let detached = panel.rendered_text_for_test(2, 80, &exec_state);
+        assert!(!detached.iter().any(|line| line.contains("line 5")));
+
+        let _ = panel.handle_key(KeyAction::End, &idle_panel_ctx());
+        assert!(matches!(panel.scroll, ScrollMode::Auto));
+
+        let followed = panel.rendered_text_for_test(2, 80, &exec_state);
+        assert!(followed.iter().any(|line| line.contains("line 5")));
+    }
+
+    #[test]
+    fn pushing_user_message_rejoins_bottom_follow() {
+        let mut panel = ContentPanel::new(Vec::new());
+        let exec_state = ExecState::Streaming { turn_id: 1 };
+
+        panel.begin_stream();
+        panel.append_stream_chunk("line 1\nline 2\nline 3\nline 4");
+        let _ = panel.rendered_text_for_test(2, 80, &exec_state);
+        let _ = panel.handle_key(KeyAction::Up, &idle_panel_ctx());
+        assert!(matches!(panel.scroll, ScrollMode::Manual(1)));
+
+        panel.push_user("new task".into());
+        panel.begin_stream();
+        let visible = panel.rendered_text_for_test(2, 80, &exec_state);
+
+        assert!(matches!(panel.scroll, ScrollMode::Auto));
+        assert!(visible.iter().any(|line| line.contains("new task")));
+    }
+
+    #[test]
+    fn auto_follow_anchors_to_bottom_of_multiline_user_message() {
+        let mut panel = ContentPanel::new(Vec::new());
+        let exec_state = ExecState::Streaming { turn_id: 1 };
+
+        panel.push_user("line 1\nline 2\nline 3".into());
+        panel.begin_stream();
+
+        let visible = panel.rendered_text_for_test(2, 80, &exec_state);
+        let joined = visible.join(" ");
+
+        assert!(matches!(panel.scroll, ScrollMode::Auto));
+        assert_eq!(visible.len(), 2);
+        assert!(!joined.contains("line 1"));
+        assert!(joined.contains("line 2"));
+        assert!(joined.contains("line 3"));
     }
 }

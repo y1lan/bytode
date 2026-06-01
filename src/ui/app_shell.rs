@@ -131,6 +131,7 @@ impl AppShell {
         self.runtime.status.task = task_label(&self.exec_state).to_string();
         self.input_panel_mut().clear_notice();
         self.content_panel_mut().push_user(input.to_string());
+        self.content_panel_mut().scroll_to_bottom();
         self.content_panel_mut().begin_stream();
     }
 
@@ -410,6 +411,17 @@ impl AppShell {
             modal: true,
             capture: true,
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rendered_content_text_for_test(
+        &mut self,
+        visible: usize,
+        width: usize,
+    ) -> Vec<String> {
+        let exec_state = self.exec_state.clone();
+        self.content_panel_mut()
+            .rendered_text_for_test(visible, width, &exec_state)
     }
 }
 
