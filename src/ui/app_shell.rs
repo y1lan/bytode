@@ -25,19 +25,8 @@ impl AppShell {
         git_branch: Option<String>,
         git_dirty: bool,
         detection_source: &str,
-        chat_history_init: Vec<String>,
+        chat_history_init: Vec<HistoryEntry>,
     ) -> Self {
-        let entries = chat_history_init
-            .into_iter()
-            .map(|text| {
-                if text.starts_with('\u{25b8}') {
-                    HistoryEntry::User(text.trim_start_matches('\u{25b8}').trim().to_string())
-                } else {
-                    HistoryEntry::Assistant(text)
-                }
-            })
-            .collect::<Vec<_>>();
-
         let runtime = RuntimeSnapshot {
             tool_names: Vec::new(),
             status: StatusBarState {
@@ -62,7 +51,7 @@ impl AppShell {
         };
 
         let panels = vec![
-            PanelNode::Content(ContentPanel::new(entries)),
+            PanelNode::Content(ContentPanel::new(chat_history_init)),
             PanelNode::Input(InputPanel::new()),
             PanelNode::Sidebar(SidebarPanel::new()),
             PanelNode::StatusBar(StatusBarPanel::new()),

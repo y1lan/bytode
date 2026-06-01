@@ -2,6 +2,7 @@ use crate::agent::Agent;
 use crate::project::ProjectProfile;
 use crate::ui::app_shell::AppShell;
 use crate::ui::events::{Effect, KeyAction, TurnId};
+use crate::ui::panels::HistoryEntry;
 use crate::ui::Terminal;
 use crossterm::event::Event;
 use futures::{FutureExt, StreamExt};
@@ -15,7 +16,7 @@ pub async fn run(
     git_branch: Option<String>,
     git_dirty: bool,
     detection_source: &str,
-    chat: Vec<String>,
+    chat: Vec<HistoryEntry>,
 ) -> Agent {
     std::panic::AssertUnwindSafe(run_inner(
         agent,
@@ -45,7 +46,7 @@ async fn run_inner(
     git_branch: Option<String>,
     git_dirty: bool,
     detection_source: &str,
-    chat_history_init: Vec<String>,
+    chat_history_init: Vec<HistoryEntry>,
 ) -> Agent {
     let terminal = Arc::new(Mutex::new(Terminal::init().expect("terminal")));
     let mut shell = AppShell::new(
