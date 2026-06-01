@@ -78,7 +78,7 @@ impl InputPanel {
                 self.cursor = 0;
                 DispatchResult::Consumed(Vec::new())
             }
-            KeyAction::ShiftEnter => {
+            KeyAction::ShiftEnter | KeyAction::AltEnter => {
                 self.insert_char('\n');
                 DispatchResult::Consumed(Vec::new())
             }
@@ -257,6 +257,19 @@ mod tests {
         let _ = panel.handle_key(KeyAction::Enter, &ctx);
 
         assert_eq!(panel.pending.as_deref(), Some("h"));
+    }
+
+    #[test]
+    fn alt_enter_inserts_newline() {
+        let mut panel = InputPanel::new();
+        let idle = ExecState::Idle;
+        let ctx = PanelContext { exec_state: &idle };
+
+        let _ = panel.handle_key(KeyAction::Char('a'), &ctx);
+        let _ = panel.handle_key(KeyAction::AltEnter, &ctx);
+        let _ = panel.handle_key(KeyAction::Char('b'), &ctx);
+
+        assert_eq!(panel.input, "a\nb");
     }
 
     #[test]
