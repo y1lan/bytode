@@ -11,48 +11,56 @@ pub struct OverlayContext;
 
 enum OverlayNode {
     Dialog(DialogOverlay),
+    Help(HelpOverlay),
 }
 
 impl OverlayNode {
     pub fn from_state(state: OverlayState) -> Self {
         match state.id {
             OverlayId::Dialog => OverlayNode::Dialog(DialogOverlay::from_state(state)),
+            OverlayId::Help => OverlayNode::Help(HelpOverlay::from_state(state)),
         }
     }
 
     pub fn id(&self) -> OverlayId {
         match self {
             OverlayNode::Dialog(overlay) => overlay.id(),
+            OverlayNode::Help(overlay) => overlay.id(),
         }
     }
 
     pub fn z_index(&self) -> i16 {
         match self {
             OverlayNode::Dialog(overlay) => overlay.z_index(),
+            OverlayNode::Help(overlay) => overlay.z_index(),
         }
     }
 
     pub fn modal(&self) -> bool {
         match self {
             OverlayNode::Dialog(overlay) => overlay.modal(),
+            OverlayNode::Help(overlay) => overlay.modal(),
         }
     }
 
     pub fn capture_key(&self, key: &KeyAction) -> bool {
         match self {
             OverlayNode::Dialog(overlay) => overlay.capture_key(key),
+            OverlayNode::Help(overlay) => overlay.capture_key(key),
         }
     }
 
     pub fn handle_key(&mut self, key: KeyAction, ctx: &mut OverlayContext) -> DispatchResult {
         match self {
             OverlayNode::Dialog(overlay) => overlay.handle_key(key, ctx),
+            OverlayNode::Help(overlay) => overlay.handle_key(key, ctx),
         }
     }
 
     pub fn render(&self, frame: &mut Frame, ctx: &RenderContext<'_>) {
         match self {
             OverlayNode::Dialog(overlay) => overlay.render(frame, ctx),
+            OverlayNode::Help(overlay) => overlay.render(frame, ctx),
         }
     }
 }
@@ -76,6 +84,14 @@ impl OverlayStack {
 
     pub fn close(&mut self, id: OverlayId) {
         self.overlays.retain(|overlay| overlay.id() != id);
+    }
+
+    pub fn is_open(&self, id: OverlayId) -> bool {
+        self.overlays.iter().any(|overlay| overlay.id() == id)
+    }
+
+    pub fn close_top(&mut self) -> Option<OverlayId> {
+        self.overlays.pop().map(|overlay| overlay.id())
     }
 
     pub fn handle_modal_key(&mut self, key: KeyAction) -> Option<Vec<Effect>> {
@@ -113,6 +129,97 @@ fn handle_overlay_key(overlay: &mut OverlayNode, key: KeyAction) -> Vec<Effect> 
 
 struct DialogOverlay {
     state: OverlayState,
+}
+
+struct HelpOverlay {
+    state: OverlayState,
+    scroll: usize,
+}
+
+impl HelpOverlay {
+    fn from_state(state: OverlayState) -> Self {
+        Self { state, scroll: 0 }
+    }
+
+    fn id(&self) -> OverlayId {
+        self.state.id
+    }
+
+    fn z_index(&self) -> i16 {
+        self.state.z_index
+    }
+
+    fn modal(&self) -> bool {
+        self.state.modal
+    }
+
+    fn capture_key(&self, key: &KeyAction) -> bool {
+        matches!(
+            key,
+            KeyAction::Tab
+                | KeyAction::BackTab
+                | KeyAction::Up
+                | KeyAction::Down
+                | KeyAction::PageUp
+                | KeyAction::PageDown
+                | KeyAction::Esc
+                | KeyAction::CtrlSlash
+                | KeyAction::Char('q')
+                | KeyAction::Enter
+        )
+    }
+
+    fn handle_key(&mut self, key: KeyAction, _ctx: &mut OverlayContext) -> DispatchResult {
+        match key {
+            KeyAction::CtrlSlash | KeyAction::Esc | KeyAction::Char('q') => {
+                DispatchResult::Consumed(vec![Effect::CloseOverlay(self.state.id)])
+            }
+            KeyAction::Up => {
+                self.scroll = self.scroll.saturating_sub(1);
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::Down => {
+                self.scroll = self.scroll.saturating_add(1);
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::PageUp => {
+                self.scroll = self.scroll.saturating_sub(8);
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::PageDown => {
+                self.scroll = self.scroll.saturating_add(8);
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::Tab | KeyAction::BackTab | KeyAction::Enter => {
+                DispatchResult::Consumed(Vec::new())
+            }
+            _ => DispatchResult::Ignored,
+        }
+    }
+
+    fn render(&self, frame: &mut Frame, _ctx: &RenderContext<'_>) {
+        let area = centered_rect(frame.area(), 76, 18);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(format!(" {} ", self.state.title))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BLUE))
+            .style(Style::default().bg(BG));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let lines = self
+            .state
+            .body
+            .lines()
+            .skip(self.scroll)
+            .map(Line::from)
+            .collect::<Vec<_>>();
+        let paragraph = Paragraph::new(lines)
+            .style(Style::default().fg(TXT))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, inner);
+    }
 }
 
 impl DialogOverlay {

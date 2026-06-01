@@ -281,9 +281,26 @@ impl AppShell {
 
     fn route_global_key(&mut self, key: &KeyAction) -> Option<Vec<Effect>> {
         match key {
+            KeyAction::CtrlD => {
+                if self.exec_state.is_busy() {
+                    self.show_notice("Press Ctrl+C to cancel first".into());
+                    return Some(Vec::new());
+                }
+                Some(vec![Effect::Exit])
+            }
             KeyAction::CtrlT => {
                 self.sidebar_visible = !self.sidebar_visible;
                 self.normalize_focus();
+                Some(Vec::new())
+            }
+            KeyAction::CtrlSlash => {
+                self.toggle_help_overlay();
+                Some(Vec::new())
+            }
+            KeyAction::Esc => {
+                if let Some(id) = self.overlays.close_top() {
+                    return Some(vec![Effect::CloseOverlay(id)]);
+                }
                 Some(Vec::new())
             }
             _ => None,
@@ -295,12 +312,39 @@ impl AppShell {
             return None;
         }
 
-        match self.exec_state.active_turn_id() {
-            Some(turn_id) => {
+        match self.exec_state.clone() {
+            ExecState::Idle if self.window_manager.focus() == PanelId::Input => {
+                if self.input_panel_mut().is_empty() {
+                    self.show_notice("Ctrl+D exits".into());
+                } else {
+                    self.input_panel_mut().clear_input();
+                    self.show_notice("input cleared".into());
+                }
+                Some(Vec::new())
+            }
+            ExecState::Streaming { turn_id } => {
                 self.mark_cancel_requested(turn_id);
                 Some(vec![Effect::CancelTurn(turn_id)])
             }
-            None => Some(vec![Effect::Exit]),
+            ExecState::AwaitingApproval { turn_id, request } => Some(vec![
+                Effect::RejectTool(request),
+                Effect::CancelTurn(turn_id),
+            ]),
+            ExecState::ToolRunning { turn_id, .. } => {
+                self.show_notice("cancelling running tool".into());
+                Some(vec![Effect::CancelTurn(turn_id)])
+            }
+            ExecState::Blocked { turn_id, .. } => {
+                let mut effects = Vec::new();
+                if let Some(id) = self.overlays.close_top() {
+                    effects.push(Effect::CloseOverlay(id));
+                }
+                if let Some(turn_id) = turn_id {
+                    effects.push(Effect::CancelTurn(turn_id));
+                }
+                Some(effects)
+            }
+            ExecState::Cancelling { .. } | ExecState::Idle => Some(Vec::new()),
         }
     }
 
@@ -361,6 +405,23 @@ impl AppShell {
     fn show_notice(&mut self, notice: String) {
         self.input_panel_mut().set_notice(notice);
     }
+
+    fn toggle_help_overlay(&mut self) {
+        if self.overlays.is_open(OverlayId::Help) {
+            self.overlays.close(OverlayId::Help);
+            return;
+        }
+
+        self.overlays.open(OverlayState {
+            id: OverlayId::Help,
+            title: "Keymap".into(),
+            body: help_overlay_text().into(),
+            z_index: 50,
+            slot: WindowSlot::Center,
+            modal: true,
+            capture: true,
+        });
+    }
 }
 
 enum SlashCommand {
@@ -403,6 +464,10 @@ fn task_label(exec_state: &ExecState) -> &'static str {
     }
 }
 
+fn help_overlay_text() -> &'static str {
+    "Ctrl+D  exit\nCtrl+C  cancel intent\nCtrl+T  toggle sidebar\nCtrl+/  toggle help\nTab     next focus\nShift+Tab previous focus\n\nInput:\nEnter submit\nAlt+Enter newline\nShift+Enter newline\nCtrl+A/Ctrl+E move\nCtrl+U clear\n\nContent:\nUp/Down scroll\nPageUp/PageDown page\nHome top\nEnd bottom"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,10 +487,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_exits_when_idle() {
+    fn ctrl_c_shows_exit_notice_when_idle_input_empty() {
         let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
         let effects = shell.dispatch_key(KeyAction::CtrlC);
-        assert_eq!(effects, vec![Effect::Exit]);
+        assert!(effects.is_empty());
+        assert_eq!(shell.input_panel_mut().notice_text(), Some("Ctrl+D exits"));
     }
 
     #[test]
@@ -463,5 +529,23 @@ mod tests {
 
         let input = shell.input_panel_mut();
         assert_eq!(input.notice_text(), Some("still streaming"));
+    }
+
+    #[test]
+    fn ctrl_d_exits_when_idle() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        let effects = shell.dispatch_key(KeyAction::CtrlD);
+        assert_eq!(effects, vec![Effect::Exit]);
+    }
+
+    #[test]
+    fn ctrl_slash_toggles_help_overlay() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        assert!(shell.dispatch_key(KeyAction::CtrlSlash).is_empty());
+        assert!(shell.overlays.is_open(OverlayId::Help));
+        let effects = shell.dispatch_key(KeyAction::CtrlSlash);
+        assert_eq!(effects, vec![Effect::CloseOverlay(OverlayId::Help)]);
+        shell.apply_effect(&effects[0]);
+        assert!(!shell.overlays.is_open(OverlayId::Help));
     }
 }

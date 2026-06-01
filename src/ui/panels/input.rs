@@ -6,13 +6,14 @@ use ratatui::widgets::Paragraph;
 
 pub struct InputPanel {
     input: String,
+    cursor: usize,
     pending: Option<String>,
     notice: Option<String>,
 }
 
 impl InputPanel {
     pub fn new() -> Self {
-        Self { input: String::new(), pending: None, notice: None }
+        Self { input: String::new(), cursor: 0, pending: None, notice: None }
     }
 
     pub fn id(&self) -> PanelId {
@@ -38,19 +39,45 @@ impl InputPanel {
     pub fn handle_key(&mut self, key: KeyAction, ctx: &PanelContext<'_>) -> DispatchResult {
         match key {
             KeyAction::Char(ch) => {
-                self.input.push(ch);
+                self.insert_char(ch);
                 DispatchResult::Consumed(Vec::new())
             }
             KeyAction::Backspace => {
-                self.input.pop();
+                self.backspace();
                 DispatchResult::Consumed(Vec::new())
             }
-            KeyAction::ShiftEnter => {
-                self.input.push('\n');
+            KeyAction::Delete => {
+                self.delete();
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::Left => {
+                self.move_left();
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::Right => {
+                self.move_right();
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::Home | KeyAction::CtrlA => {
+                self.cursor = 0;
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::End | KeyAction::CtrlE => {
+                self.cursor = self.len_chars();
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::CtrlU => {
+                self.input.clear();
+                self.cursor = 0;
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::AltEnter | KeyAction::ShiftEnter => {
+                self.insert_char('\n');
                 DispatchResult::Consumed(Vec::new())
             }
             KeyAction::Enter => {
                 let input = std::mem::take(&mut self.input);
+                self.cursor = 0;
                 if input.is_empty() {
                     return DispatchResult::Consumed(Vec::new());
                 }
@@ -82,7 +109,7 @@ impl InputPanel {
             inner.width,
             inner.height.saturating_sub(offset).max(1),
         );
-        render::render_input(frame, input_area, &self.input);
+        render::render_input(frame, input_area, &self.input, self.cursor);
     }
 
     pub fn take_pending(&mut self) -> Option<String> {
@@ -101,6 +128,15 @@ impl InputPanel {
         self.pending.as_deref().or(self.notice.as_deref())
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.input.is_empty()
+    }
+
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+    }
+
     fn pending_notice_line(&self) -> Option<Line<'static>> {
         if let Some(pending) = &self.pending {
             return Some(Line::from(Span::styled(
@@ -114,6 +150,48 @@ impl InputPanel {
                 Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::DIM),
             ))
         })
+    }
+
+    fn len_chars(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    fn insert_char(&mut self, ch: char) {
+        let mut chars = self.input.chars().collect::<Vec<_>>();
+        let cursor = self.cursor.min(chars.len());
+        chars.insert(cursor, ch);
+        self.cursor = cursor + 1;
+        self.input = chars.into_iter().collect();
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let mut chars = self.input.chars().collect::<Vec<_>>();
+        let remove_at = self.cursor - 1;
+        if remove_at < chars.len() {
+            chars.remove(remove_at);
+            self.cursor -= 1;
+            self.input = chars.into_iter().collect();
+        }
+    }
+
+    fn delete(&mut self) {
+        let mut chars = self.input.chars().collect::<Vec<_>>();
+        if self.cursor >= chars.len() {
+            return;
+        }
+        chars.remove(self.cursor);
+        self.input = chars.into_iter().collect();
+    }
+
+    fn move_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn move_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.len_chars());
     }
 }
 
@@ -133,5 +211,20 @@ mod tests {
         let _ = panel.handle_key(KeyAction::Enter, &ctx);
 
         assert_eq!(panel.pending.as_deref(), Some("h"));
+    }
+
+    #[test]
+    fn inserts_and_moves_cursor() {
+        let mut panel = InputPanel::new();
+        let idle = ExecState::Idle;
+        let ctx = PanelContext { exec_state: &idle };
+
+        let _ = panel.handle_key(KeyAction::Char('a'), &ctx);
+        let _ = panel.handle_key(KeyAction::Char('b'), &ctx);
+        let _ = panel.handle_key(KeyAction::Left, &ctx);
+        let _ = panel.handle_key(KeyAction::Char('x'), &ctx);
+
+        assert_eq!(panel.input, "axb");
+        assert_eq!(panel.cursor, 2);
     }
 }

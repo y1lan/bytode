@@ -53,8 +53,12 @@ impl ContentPanel {
 
     pub fn handle_key(&mut self, key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {
         let up_step = match key {
-            KeyAction::Up => Some(5),
+            KeyAction::Up => Some(1),
             KeyAction::PageUp => Some(20),
+            KeyAction::Home => {
+                self.scroll = ScrollMode::Manual(100_000);
+                return DispatchResult::Consumed(Vec::new());
+            }
             _ => None,
         };
         if let Some(step) = up_step {
@@ -66,8 +70,15 @@ impl ContentPanel {
         }
 
         let down_step = match key {
-            KeyAction::Down => Some(5),
+            KeyAction::Down => Some(1),
             KeyAction::PageDown => Some(20),
+            KeyAction::End => {
+                self.scroll = ScrollMode::Auto;
+                return DispatchResult::Consumed(Vec::new());
+            }
+            KeyAction::CtrlL => {
+                return DispatchResult::Consumed(Vec::new());
+            }
             _ => None,
         };
         if let Some(step) = down_step {

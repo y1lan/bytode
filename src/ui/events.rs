@@ -13,6 +13,7 @@ pub enum PanelId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OverlayId {
     Dialog,
+    Help,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,18 +59,29 @@ pub struct OverlayState {
 pub enum KeyAction {
     Char(char),
     Enter,
+    AltEnter,
     ShiftEnter,
     Backspace,
+    Delete,
     Up,
     Down,
     Left,
     Right,
     PageUp,
     PageDown,
+    Home,
+    End,
+    Esc,
     Tab,
     BackTab,
+    CtrlA,
     CtrlC,
+    CtrlD,
+    CtrlE,
+    CtrlL,
+    CtrlSlash,
     CtrlT,
+    CtrlU,
 }
 
 impl KeyAction {
@@ -82,23 +94,54 @@ impl KeyAction {
             KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::CtrlC)
             }
+            KeyCode::Char('d') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlD)
+            }
+            KeyCode::Char('a') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlA)
+            }
+            KeyCode::Char('e') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlE)
+            }
+            KeyCode::Char('l') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlL)
+            }
+            KeyCode::Char('u') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlU)
+            }
+            KeyCode::Char('/') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlSlash)
+            }
+            KeyCode::Char('_') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlSlash)
+            }
+            KeyCode::Char('7') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlSlash)
+            }
             KeyCode::Char('t') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::CtrlT)
             }
             KeyCode::Char(ch) if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT => {
                 Some(KeyAction::Char(ch))
             }
+            KeyCode::Enter if event.modifiers.contains(KeyModifiers::ALT) => {
+                Some(KeyAction::AltEnter)
+            }
             KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                 Some(KeyAction::ShiftEnter)
             }
             KeyCode::Enter => Some(KeyAction::Enter),
             KeyCode::Backspace => Some(KeyAction::Backspace),
+            KeyCode::Delete => Some(KeyAction::Delete),
             KeyCode::Up => Some(KeyAction::Up),
             KeyCode::Down => Some(KeyAction::Down),
             KeyCode::Left => Some(KeyAction::Left),
             KeyCode::Right => Some(KeyAction::Right),
             KeyCode::PageUp => Some(KeyAction::PageUp),
             KeyCode::PageDown => Some(KeyAction::PageDown),
+            KeyCode::Home => Some(KeyAction::Home),
+            KeyCode::End => Some(KeyAction::End),
+            KeyCode::Esc => Some(KeyAction::Esc),
             KeyCode::Tab => Some(KeyAction::Tab),
             KeyCode::BackTab => Some(KeyAction::BackTab),
             _ => None,

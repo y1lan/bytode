@@ -38,6 +38,17 @@ impl SidebarPanel {
                 self.selected = self.selected.saturating_add(1);
                 DispatchResult::Consumed(Vec::new())
             }
+            KeyAction::PageUp => {
+                self.selected = self.selected.saturating_sub(5);
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::PageDown => {
+                self.selected = self.selected.saturating_add(5);
+                DispatchResult::Consumed(Vec::new())
+            }
+            KeyAction::Enter | KeyAction::Left | KeyAction::Right | KeyAction::Esc => {
+                DispatchResult::Consumed(Vec::new())
+            }
             _ => DispatchResult::Ignored,
         }
     }
