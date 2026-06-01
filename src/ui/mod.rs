@@ -1,6 +1,9 @@
-pub mod layout;
+pub mod app_shell;
+pub mod events;
+pub mod panels;
 pub mod render;
 pub mod statusbar;
+pub mod window_manager;
 
 use crossterm::{
     execute,

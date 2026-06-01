@@ -70,6 +70,10 @@ impl Agent {
         self.cancelled.clone()
     }
 
+    pub fn reset_cancelled(&self) {
+        self.cancelled.store(false, Ordering::Relaxed);
+    }
+
     /// Run a turn with SSE streaming — `on_text` is called for each token chunk
     pub async fn run_turn_streaming(
         &mut self,
