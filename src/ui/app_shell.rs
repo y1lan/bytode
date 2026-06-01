@@ -361,3 +361,39 @@ fn task_label(exec_state: &ExecState) -> &'static str {
         ExecState::Blocked { .. } => "blocked",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::{BuildSystem, Language};
+
+    fn profile() -> ProjectProfile {
+        ProjectProfile {
+            primary: Language::Rust,
+            build_system: BuildSystem::Cargo,
+            all_languages: vec![Language::Rust],
+            test_framework: None,
+            root: std::path::PathBuf::from("."),
+            source_dirs: vec![std::path::PathBuf::from("src")],
+            is_workspace: false,
+            workspace_members: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ctrl_c_exits_when_idle() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        let effects = shell.dispatch_key(KeyAction::CtrlC);
+        assert_eq!(effects, vec![Effect::Exit]);
+    }
+
+    #[test]
+    fn ctrl_c_cancels_active_turn() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        shell.start_turn(7, "hello");
+
+        let effects = shell.dispatch_key(KeyAction::CtrlC);
+        assert_eq!(effects, vec![Effect::CancelTurn(7)]);
+        assert!(matches!(shell.exec_state, ExecState::Cancelling { turn_id: 7 }));
+    }
+}
