@@ -10,26 +10,33 @@ use crate::session::compact::{
     run_micro_compact,
 };
 use crate::session::context::{RenderedEntry, render_context_entries};
+use crate::session::conversation::{
+    CanonicalContext, CanonicalConversationStore, CanonicalMeta, CanonicalRecord,
+    build_canonical_context,
+};
 use crate::session::model::{
     ArtifactKind, ArtifactRef, EntryId, EntryMeta, MicroCompactResult, SessionEntry,
     SessionEntryKind, SessionId, ToolCallEntry, ToolResultEntry, ToolStatus,
 };
-use crate::session::store::fs::{record_inline_limit, ArtifactStore};
 use crate::session::store::SessionStore;
+use crate::session::store::fs::{ArtifactStore, record_inline_limit};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct SessionRuntime {
     store: SessionStore,
     policy: MicroCompactPolicy,
+    cc_store: CanonicalConversationStore,
 }
 
 impl SessionRuntime {
     pub fn open(session_id: SessionId, session_root: PathBuf) -> Result<Self> {
-        let store = SessionStore::open(session_id, session_root)?;
+        let store = SessionStore::open(session_id.clone(), session_root.clone())?;
+        let cc_store = CanonicalConversationStore::open(session_root)?;
         Ok(SessionRuntime {
             store,
             policy: MicroCompactPolicy::default(),
+            cc_store,
         })
     }
 
@@ -270,6 +277,30 @@ impl SessionRuntime {
         let entries = self.store.replay_entries()?;
         let overlay = CompactOverlay::from_entries(&entries);
         render_context_entries(&entries, &overlay, self.store.artifacts())
+    }
+
+    // ------------------------------------------------------------------
+    // Canonical conversation
+    // ------------------------------------------------------------------
+
+    /// Return the next `CanonicalMeta` for a canonical record.
+    pub fn cc_next_meta(&mut self) -> Result<CanonicalMeta> {
+        let seq = self.cc_store.next_seq();
+        Ok(CanonicalMeta {
+            seq,
+            created_at: now_secs(),
+        })
+    }
+
+    /// Append a canonical record to the conversation log.
+    pub fn cc_append(&mut self, record: CanonicalRecord) -> Result<()> {
+        self.cc_store.append(record)
+    }
+
+    /// Build `CanonicalContext` from the canonical conversation log.
+    pub fn canonical_context(&self) -> Result<CanonicalContext> {
+        let records = self.cc_store.replay()?;
+        Ok(build_canonical_context(&records))
     }
 
     // ------------------------------------------------------------------

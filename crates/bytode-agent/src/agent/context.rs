@@ -26,31 +26,37 @@ impl ContextBuilder {
         }
     }
 
-    /// Build the request messages from session-log-derived context items. The
-    /// rendered slice is a full replay (already overlay-applied); nothing is
-    /// dropped here.
-    pub fn build(&mut self, rendered: &[RenderedEntry]) -> Vec<ChatCompletionRequestMessage> {
-        // Layer 1: Core (prefix-cache anchor)
-        let mut messages = vec![llm::build_system_message(&self.core_prompt)];
+    /// Returns the core system prompt (for use with canonical context).
+    pub fn core_prompt(&self) -> &str {
+        &self.core_prompt
+    }
 
-        append_rendered_entries(&mut messages, rendered);
+    /// Returns the SOP prompt (for use with canonical context).
+    pub fn sop_prompt(&self) -> &str {
+        &self.sop_prompt
+    }
 
-        // Layer 2: SOP (conditional)
-        if self.last_was_failure {
-            messages.push(llm::build_system_message(&self.sop_prompt));
-            self.last_was_failure = false;
-        }
+    /// Whether the last tool result was a failure.
+    pub fn last_was_failure(&self) -> bool {
+        self.last_was_failure
+    }
 
-        // Estimate tokens (1 tok ≈ 4 chars)
-        self.ctx_used = messages
+    /// Clear the last-failure flag after injecting SOP.
+    pub fn clear_last_failure(&mut self) {
+        self.last_was_failure = false;
+    }
+
+    /// Estimate tokens from the given messages (1 tok ≈ 4 chars).
+    pub fn estimate_tokens(&mut self, messages: &[ChatCompletionRequestMessage]) -> u64 {
+        let used: u64 = messages
             .iter()
             .map(|m| {
                 let json_str = serde_json::to_string(m).unwrap_or_default();
                 json_str.len() as u64 / 4
             })
             .sum();
-
-        messages
+        self.ctx_used = used;
+        used
     }
 
     pub fn update_last_result(&mut self, result: &ToolResult) {
@@ -72,6 +78,7 @@ impl ContextBuilder {
     }
 }
 
+#[allow(dead_code)]
 fn append_rendered_entries(
     messages: &mut Vec<ChatCompletionRequestMessage>,
     rendered: &[RenderedEntry],
@@ -133,7 +140,9 @@ fn append_rendered_entries(
                     messages.push(llm::build_tool_result_message(&content, &call_id));
                 }
             }
-            RenderedEntry::ToolResult { call_id, content, .. } => {
+            RenderedEntry::ToolResult {
+                call_id, content, ..
+            } => {
                 messages.push(llm::build_tool_result_message(content, call_id));
                 idx += 1;
             }
@@ -184,12 +193,24 @@ mod tests {
             .and_then(|v| v.as_array())
             .expect("assistant tool_calls");
         assert_eq!(tool_calls.len(), 2);
-        assert_eq!(tool_calls[0].get("id").and_then(|v| v.as_str()), Some("call_1"));
-        assert_eq!(tool_calls[1].get("id").and_then(|v| v.as_str()), Some("call_2"));
+        assert_eq!(
+            tool_calls[0].get("id").and_then(|v| v.as_str()),
+            Some("call_1")
+        );
+        assert_eq!(
+            tool_calls[1].get("id").and_then(|v| v.as_str()),
+            Some("call_2")
+        );
         let tool_1 = serde_json::to_value(&messages[2]).unwrap();
         let tool_2 = serde_json::to_value(&messages[3]).unwrap();
-        assert_eq!(tool_1.get("tool_call_id").and_then(|v| v.as_str()), Some("call_1"));
-        assert_eq!(tool_2.get("tool_call_id").and_then(|v| v.as_str()), Some("call_2"));
+        assert_eq!(
+            tool_1.get("tool_call_id").and_then(|v| v.as_str()),
+            Some("call_1")
+        );
+        assert_eq!(
+            tool_2.get("tool_call_id").and_then(|v| v.as_str()),
+            Some("call_2")
+        );
     }
 
     #[test]
@@ -283,7 +304,6 @@ mod tests {
             );
         }
     }
-
 }
 
 fn build_core_prompt(profile: &ProjectProfile, registry: &ToolRegistry) -> String {

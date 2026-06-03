@@ -1,5 +1,6 @@
 pub(crate) mod context;
 pub(crate) mod memory;
+pub(crate) mod provider_adapter;
 
 use crate::error::Result;
 use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
@@ -9,9 +10,12 @@ use crate::session::compact::interactive::{
     create_compact_store, generate_evidence_pack, select_source_range,
 };
 use crate::session::compact::kind_for_tool;
-use crate::session::{
-    InteractiveCompactEntry, SessionId, SessionRuntime, ToolStatus,
+use crate::session::conversation::{
+    CanonicalAssistantPart, CanonicalAssistantResponse, CanonicalContent, CanonicalMessageId,
+    CanonicalRecord, CanonicalRecordKind, CanonicalToolResultPart, CanonicalToolResults,
+    CanonicalToolStatus as CcToolStatus, ResponseId, ToolCallId, TurnId,
 };
+use crate::session::{InteractiveCompactEntry, SessionId, SessionRuntime, ToolStatus};
 use crate::tools::{ToolRegistry, ToolResult};
 use crate::transcript::{
     AssistantMessage, AssistantPart, HistoryEntry, TextPart, ToolPart, ToolPresentation, ToolState,
@@ -19,6 +23,7 @@ use crate::transcript::{
 };
 use context::{ContextBuilder, format_tool_result};
 use memory::{MemoryLayer, Turn};
+use provider_adapter::ProviderAdapter;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -103,20 +108,36 @@ impl Agent {
         mut on_text: impl FnMut(&str),
     ) -> Result<AgentOutput> {
         // In InteractiveCompact mode, route to the compact session instead of
-        // the main session. The compact session uses non-streaming chat, so
-        // we deliver the full response as one chunk via `on_text`.
+        // the main session.
         if self.mode == AgentMode::InteractiveCompact {
             let output = self.run_interactive_compact_turn(user_input).await?;
             on_text(&output.content);
             return Ok(AgentOutput::Text(output.content));
         }
 
-        // Record the user message in the session log (context source) and in
-        // memory (UI transcript).
+        // Record user message in audit log.
         self.runtime.record_user_message(user_input)?;
+
+        // Write canonical TurnStarted.
+        let turn_id = {
+            let meta = self.runtime.cc_next_meta()?;
+            let tid = TurnId(format!("t-{}", meta.seq));
+            self.runtime.cc_append(CanonicalRecord {
+                meta,
+                kind: CanonicalRecordKind::TurnStarted(
+                    crate::session::conversation::CanonicalTurnStarted {
+                        turn_id: tid.clone(),
+                        user_message_id: CanonicalMessageId(format!("m-{}", meta.seq)),
+                        content: user_input.to_string(),
+                    },
+                ),
+            })?;
+            tid
+        };
+
         self.memory.add_turn(Turn::new(user_input));
 
-        // Per-user-turn auto micro compact: ColdResume / TurnInterval / BloatPressure.
+        // Per-user-turn auto micro compact.
         self.runtime.maybe_micro_compact_for_turn()?;
 
         let mut consecutive_errors: u32 = 0;
@@ -127,9 +148,18 @@ impl Agent {
                 return Ok(AgentOutput::Text("(cancelled)".into()));
             }
 
-            let mut rendered = self.runtime.rendered_context_entries()?;
-            let mut messages = self.context.build(&rendered);
-            let ctx_used = self.context.ctx_used();
+            let cc = self.runtime.canonical_context()?;
+            let mut messages = ProviderAdapter::adapt(&cc)?;
+            messages.insert(
+                0,
+                crate::llm::build_system_message(&self.context.core_prompt()),
+            );
+            if self.context.last_was_failure() {
+                messages.push(crate::llm::build_system_message(&self.context.sop_prompt()));
+                self.context.clear_last_failure();
+            }
+
+            let ctx_used = self.context.estimate_tokens(&messages);
             let ctx_total = self.context.ctx_total();
 
             // Per-request auto micro compact: ContextPressure only.
@@ -138,9 +168,7 @@ impl Agent {
                 .maybe_micro_compact_for_request(ctx_used, ctx_total)?
                 .is_some()
             {
-                // Rebuild context to reflect the compaction.
-                rendered = self.runtime.rendered_context_entries()?;
-                messages = self.context.build(&rendered);
+                // Rebuild from canonical context after compaction.
             }
 
             let tools = self.registry.to_openai_format();
@@ -149,6 +177,38 @@ impl Agent {
 
             match response {
                 LlmOutput::Text(text) => {
+                    // Write canonical AssistantResponse (text).
+                    {
+                        let meta = self.runtime.cc_next_meta()?;
+                        let msg_id = CanonicalMessageId(format!("m-{}", meta.seq));
+                        self.runtime.cc_append(CanonicalRecord {
+                            meta,
+                            kind: CanonicalRecordKind::AssistantResponse(
+                                CanonicalAssistantResponse {
+                                    turn_id: turn_id.clone(),
+                                    response_id: ResponseId(format!("r-{}", meta.seq)),
+                                    message_id: msg_id,
+                                    parts: vec![CanonicalAssistantPart::Text {
+                                        content: text.clone(),
+                                    }],
+                                },
+                            ),
+                        })?;
+                    }
+
+                    // Write canonical TurnFinished.
+                    {
+                        let meta = self.runtime.cc_next_meta()?;
+                        self.runtime.cc_append(CanonicalRecord {
+                            meta,
+                            kind: CanonicalRecordKind::TurnFinished(
+                                crate::session::conversation::CanonicalTurnFinished {
+                                    turn_id: turn_id.clone(),
+                                },
+                            ),
+                        })?;
+                    }
+
                     self.runtime.record_assistant_message(&text)?;
                     if let Some(t) = self.memory.last_turn_mut() {
                         t.assistant_text = Some(text.clone());
@@ -156,23 +216,65 @@ impl Agent {
                     return Ok(AgentOutput::Text(text));
                 }
                 LlmOutput::ToolCalls(calls) => {
-                    let tool_call_group_id = Some(format!("tcg-{}", uuid_like_group_id(&calls)));
-                    for call in calls {
+                    // Build canonical parts and write AssistantResponse.
+                    let (response_id, cc_parts) = {
+                        let meta = self.runtime.cc_next_meta()?;
+                        let rid = ResponseId(format!("r-{}", meta.seq));
+                        let msg_id = CanonicalMessageId(format!("m-{}", meta.seq));
+                        let parts: Vec<CanonicalAssistantPart> = calls
+                            .iter()
+                            .map(|call| {
+                                let tc_id = if call.id.is_empty() {
+                                    // Synthetic id based on turn_id + response_id + part index.
+                                    ToolCallId(format!(
+                                        "{}-{}-{}",
+                                        turn_id.0,
+                                        rid.0,
+                                        calls.iter().position(|c| c.id == call.id).unwrap_or(0)
+                                    ))
+                                } else {
+                                    ToolCallId(call.id.clone())
+                                };
+                                CanonicalAssistantPart::ToolCall {
+                                    tool_call_id: tc_id,
+                                    name: call.name.clone(),
+                                    arguments: call.arguments.clone(),
+                                }
+                            })
+                            .collect();
+
+                        self.runtime.cc_append(CanonicalRecord {
+                            meta,
+                            kind: CanonicalRecordKind::AssistantResponse(
+                                CanonicalAssistantResponse {
+                                    turn_id: turn_id.clone(),
+                                    response_id: rid.clone(),
+                                    message_id: msg_id,
+                                    parts: parts.clone(),
+                                },
+                            ),
+                        })?;
+
+                        (rid, parts)
+                    };
+
+                    // Collect tool results for canonical write.
+                    let mut cc_results: Vec<CanonicalToolResultPart> = Vec::new();
+
+                    for (i, call) in calls.iter().enumerate() {
                         let tool_name = call.name.clone();
                         let tool_args = call.arguments.clone();
 
                         let args_summary = format_args(&call.name, &call.arguments);
                         on_text(&format!("\n  ⟳ {}({})\n", tool_name, args_summary));
 
-                        let call_entry_id =
-                            self.runtime
-                                .record_tool_call(
-                                    &tool_name,
-                                    Some(call.id.clone()),
-                                    tool_call_group_id.clone(),
-                                    tool_args.clone(),
-                                    None,
-                                )?;
+                        let call_entry_id = self.runtime.record_tool_call(
+                            &tool_name,
+                            Some(call.id.clone()),
+                            None, // tool_call_group_id no longer used
+                            tool_args.clone(),
+                            None,
+                        )?;
                         let tool_ref = self.registry.find(&call.name);
 
                         let (result, status) = match self.execute_tool(&call).await {
@@ -199,7 +301,6 @@ impl Agent {
                                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                                     self.record_tool_result(
                                         call_entry_id,
-                                        tool_call_group_id.clone(),
                                         &tool_name,
                                         &result,
                                         ToolStatus::Error,
@@ -214,11 +315,36 @@ impl Agent {
 
                         self.record_tool_result(
                             call_entry_id,
-                            tool_call_group_id.clone(),
                             &tool_name,
                             &result,
-                            status,
+                            status.clone(),
                         )?;
+
+                        // Collect for canonical ToolResults.
+                        let tc_id = if let Some(part) = cc_parts.get(i) {
+                            match part {
+                                CanonicalAssistantPart::ToolCall { tool_call_id, .. } => {
+                                    tool_call_id.clone()
+                                }
+                                _ => ToolCallId(format!("fallback-{}", i)),
+                            }
+                        } else {
+                            ToolCallId(format!("fallback-{}", i))
+                        };
+
+                        let cc_status = match status {
+                            ToolStatus::Ok => CcToolStatus::Ok,
+                            ToolStatus::Error => CcToolStatus::Error,
+                            ToolStatus::Cancelled => CcToolStatus::Cancelled,
+                        };
+
+                        let cc_content = CanonicalContent::Inline(format_tool_result(&result));
+
+                        cc_results.push(CanonicalToolResultPart {
+                            tool_call_id: tc_id,
+                            status: cc_status,
+                            content: cc_content,
+                        });
 
                         if let Some(t) = self.memory.last_turn_mut() {
                             t.tool_calls.push(memory::ToolCallRecord {
@@ -231,6 +357,19 @@ impl Agent {
 
                         self.context.update_last_result(&result);
                     }
+
+                    // Write canonical ToolResults.
+                    {
+                        let meta = self.runtime.cc_next_meta()?;
+                        self.runtime.cc_append(CanonicalRecord {
+                            meta,
+                            kind: CanonicalRecordKind::ToolResults(CanonicalToolResults {
+                                turn_id: turn_id.clone(),
+                                response_id,
+                                results: cc_results,
+                            }),
+                        })?;
+                    }
                 }
             }
         }
@@ -241,7 +380,6 @@ impl Agent {
     fn record_tool_result(
         &mut self,
         call_entry_id: crate::session::EntryId,
-        tool_call_group_id: Option<String>,
         tool_name: &str,
         result: &ToolResult,
         status: ToolStatus,
@@ -249,7 +387,7 @@ impl Agent {
         let content = format_tool_result(result);
         let kind = kind_for_tool(tool_name);
         self.runtime
-            .record_tool_result(call_entry_id, tool_call_group_id, status, kind, &content)?;
+            .record_tool_result(call_entry_id, None, status, kind, &content)?;
         Ok(())
     }
 
@@ -270,9 +408,7 @@ impl Agent {
 
         let source_range =
             select_source_range(&entries, self.runtime.policy()).ok_or_else(|| {
-                crate::error::BytodeError::Session(
-                    "no eligible source range to compact".into(),
-                )
+                crate::error::BytodeError::Session("no eligible source range to compact".into())
             })?;
 
         let evidence_pack_ref = generate_evidence_pack(
@@ -723,13 +859,6 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         }
         _ => "?".into(),
     }
-}
-
-fn uuid_like_group_id(calls: &[crate::llm::ToolCall]) -> String {
-    calls.first()
-        .map(|call| call.id.replace("call_", ""))
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| "group".into())
 }
 
 fn history_tool_part(record: &memory::ToolCallRecord) -> ToolPart {
