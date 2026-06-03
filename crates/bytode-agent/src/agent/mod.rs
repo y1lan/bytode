@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
 use crate::project::ProjectProfile;
 use crate::session::compact::kind_for_tool;
-use crate::session::{MicroCompactResult, SessionId, SessionRuntime, ToolStatus};
+use crate::session::{SessionId, SessionRuntime, ToolStatus};
 use crate::tools::{ToolRegistry, ToolResult};
 use crate::transcript::{
     AssistantMessage, AssistantPart, HistoryEntry, TextPart, ToolPart, ToolPresentation, ToolState,
@@ -97,6 +97,10 @@ impl Agent {
         // memory (UI transcript).
         self.runtime.record_user_message(user_input)?;
         self.memory.add_turn(Turn::new(user_input));
+
+        // Per-user-turn auto micro compact: ColdResume / TurnInterval / BloatPressure.
+        self.runtime.maybe_micro_compact_for_turn()?;
+
         let mut consecutive_errors: u32 = 0;
         const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
@@ -105,11 +109,25 @@ impl Agent {
                 return Ok(AgentOutput::Text("(cancelled)".into()));
             }
 
-            let rendered = self.runtime.rendered_context_entries()?;
-            let messages = self.context.build(&rendered);
-            let tools = self.registry.to_openai_format();
+            let mut rendered = self.runtime.rendered_context_entries()?;
+            let mut messages = self.context.build(&rendered);
+            let ctx_used = self.context.ctx_used();
+            let ctx_total = self.context.ctx_total();
 
+            // Per-request auto micro compact: ContextPressure only.
+            if self
+                .runtime
+                .maybe_micro_compact_for_request(ctx_used, ctx_total)?
+                .is_some()
+            {
+                // Rebuild context to reflect the compaction.
+                rendered = self.runtime.rendered_context_entries()?;
+                messages = self.context.build(&rendered);
+            }
+
+            let tools = self.registry.to_openai_format();
             let response = self.llm.chat_stream(messages, tools, &mut on_text).await?;
+            self.runtime.update_last_model_request_at()?;
 
             match response {
                 LlmOutput::Text(text) => {
@@ -198,11 +216,6 @@ impl Agent {
         self.runtime
             .record_tool_result(call_entry_id, status, kind, &content)?;
         Ok(())
-    }
-
-    /// Run a deterministic micro compact pass over the session log.
-    pub fn micro_compact(&mut self) -> Result<MicroCompactResult> {
-        self.runtime.micro_compact()
     }
 
     /// Non-streaming fallback

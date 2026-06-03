@@ -21,6 +21,10 @@ pub struct SessionState {
     pub session_root: PathBuf,
     pub log_path: PathBuf,
     pub artifact_dir: PathBuf,
+
+    pub last_model_request_at: Option<i64>,
+    pub last_micro_compact_seq: Option<u64>,
+    pub turns_since_last_micro_compact: usize,
 }
 
 /// Combines durable state, the log writer/reader, and the artifact store.
@@ -54,6 +58,9 @@ impl SessionStore {
             session_root: session_root.clone(),
             log_path: log_path.clone(),
             artifact_dir,
+            last_model_request_at: None,
+            last_micro_compact_seq: None,
+            turns_since_last_micro_compact: 0,
         };
         let writer = SessionLogWriter::open(&log_path)?;
         let artifacts = ArtifactStore::new(session_root);
@@ -99,6 +106,29 @@ impl SessionStore {
 
     pub fn replay_entries(&self) -> Result<Vec<SessionEntry>> {
         self.reader.read_all()
+    }
+
+    pub fn state(&self) -> &SessionState {
+        &self.state
+    }
+
+    /// Update `last_model_request_at` without appending a log entry.
+    pub fn update_last_model_request_at(&mut self, ts: i64) -> Result<()> {
+        self.state.last_model_request_at = Some(ts);
+        self.persist_state()
+    }
+
+    /// Called after a successful MicroCompact pass.
+    pub fn update_after_micro_compact(&mut self, seq: u64) -> Result<()> {
+        self.state.last_micro_compact_seq = Some(seq);
+        self.state.turns_since_last_micro_compact = 0;
+        self.persist_state()
+    }
+
+    /// Increment the per-user-turn counter. Call once per `record_user_message`.
+    pub fn increment_turns_since_last_micro_compact(&mut self) -> Result<()> {
+        self.state.turns_since_last_micro_compact += 1;
+        self.persist_state()
     }
 
     fn persist_state(&self) -> Result<()> {

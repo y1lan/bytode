@@ -104,6 +104,7 @@ pub struct MicroCompactEntry {
 #[derive(Debug, Clone)]
 pub struct MicroCompactResult {
     pub compact_entry_id: EntryId,
+    pub compact_entry_seq: u64,
     pub archived_artifacts: Vec<ArtifactRef>,
     pub compacted_entry_ids: Vec<EntryId>,
     pub saved_bytes_estimate: usize,

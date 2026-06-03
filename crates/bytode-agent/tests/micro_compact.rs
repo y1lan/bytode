@@ -8,8 +8,9 @@
 use bytode_agent::session::compact::run_micro_compact;
 use bytode_agent::session::{
     ArtifactId, ArtifactKind, ArtifactRef, CompactOverlay, EntryId, EntryMeta, MicroCompactEntry,
-    MicroCompactPolicy, RenderedEntry, SessionEntry, SessionEntryKind, SessionId, SessionStore,
-    ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry, render_context_entries,
+    MicroCompactPolicy, RenderedEntry, SessionEntry, SessionEntryKind, SessionId, SessionRuntime,
+    SessionStore, ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
+    render_context_entries,
 };
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -179,4 +180,129 @@ fn repeated_compact_uses_largest_seq() {
     let view = overlay.view_for(&target).unwrap();
     assert_eq!(view.replacement_preview, "NEW_PREVIEW");
     assert_eq!(view.compact_entry_id, EntryId::from_seq(20));
+}
+
+// ------------------------------------------------------------------
+// Automatic trigger tests
+// ------------------------------------------------------------------
+
+fn runtime(tag: &str) -> SessionRuntime {
+    SessionRuntime::open(SessionId("test".into()), temp_root(tag)).unwrap()
+}
+
+fn policy_with_auto(enabled: bool) -> MicroCompactPolicy {
+    let mut p = MicroCompactPolicy::default();
+    p.auto_enabled = enabled;
+    p
+}
+
+fn record_bloat(rt: &mut SessionRuntime, content: &str) {
+    let call = rt
+        .record_tool_call("web_search", serde_json::json!({"q": "x"}), None)
+        .unwrap();
+    rt.record_tool_result(call, ToolStatus::Ok, ArtifactKind::ToolOutput, content)
+        .unwrap();
+}
+
+/// Record a user message, then some bloat, then another user message. This
+/// pushes the bloat into the "old" region so compact can reach it.
+fn bloat_before_user(rt: &mut SessionRuntime) {
+    rt.record_user_message("task").unwrap();
+    record_bloat(rt, &"x".repeat(5_000));
+    // A second user message pushes the bloat behind the recent-user cutoff.
+    rt.record_user_message("continue").unwrap();
+}
+
+#[test]
+fn auto_trigger_skipped_when_disabled() {
+    let mut rt = runtime("auto-disabled");
+    rt.set_policy(policy_with_auto(false));
+    bloat_before_user(&mut rt);
+
+    // Per-turn triggers should all skip.
+    assert!(rt.maybe_micro_compact_for_turn().unwrap().is_none());
+    // Per-request trigger should also skip.
+    assert!(
+        rt.maybe_micro_compact_for_request(800_000, 1_000_000)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn context_pressure_triggers_when_over_ratio() {
+    let mut rt = runtime("ctx-pressure");
+    bloat_before_user(&mut rt);
+
+    // Force the compactable entry outside the recent window.
+    rt.set_policy(MicroCompactPolicy {
+        keep_recent_entries: 1,
+        keep_recent_turns: 1,
+        max_inline_tool_output_chars: 10,
+        ..MicroCompactPolicy::default()
+    });
+
+    let result = rt
+        .maybe_micro_compact_for_request(800_000, 1_000_000)
+        .unwrap();
+    assert!(result.is_some());
+    let r = result.unwrap();
+    assert!(!r.compacted_entry_ids.is_empty());
+}
+
+#[test]
+fn context_pressure_skipped_when_under_ratio() {
+    let mut rt = runtime("ctx-no-pressure");
+    bloat_before_user(&mut rt);
+
+    rt.set_policy(MicroCompactPolicy {
+        keep_recent_entries: 1,
+        max_inline_tool_output_chars: 10,
+        ..MicroCompactPolicy::default()
+    });
+
+    // ctx_used / ctx_total = 0.5 < 0.75
+    assert!(
+        rt.maybe_micro_compact_for_request(500_000, 1_000_000)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn turn_interval_triggers_after_enough_turns() {
+    let policy = MicroCompactPolicy {
+        turn_interval: 2,
+        keep_recent_entries: 1,
+        keep_recent_turns: 1,
+        max_inline_tool_output_chars: 10,
+        ..MicroCompactPolicy::default()
+    };
+
+    let mut rt = runtime("turn-interval");
+    rt.set_policy(policy);
+
+    // First turn with bloat.
+    rt.record_user_message("t1").unwrap();
+    record_bloat(&mut rt, &"a".repeat(5_000));
+    // Second turn pushes first bloat into "old" region.
+    rt.record_user_message("t2").unwrap();
+
+    // After 2 turns, TurnInterval should fire on the old bloat.
+    let result = rt.maybe_micro_compact_for_turn().unwrap();
+    assert!(result.is_some());
+    assert!(!result.unwrap().compacted_entry_ids.is_empty());
+}
+
+#[test]
+fn context_pressure_no_bloat_returns_none() {
+    let mut rt = runtime("ctx-no-bloat");
+    rt.record_user_message("hello").unwrap();
+
+    // No tool results at all — nothing to compact.
+    assert!(
+        rt.maybe_micro_compact_for_request(800_000, 1_000_000)
+            .unwrap()
+            .is_none()
+    );
 }

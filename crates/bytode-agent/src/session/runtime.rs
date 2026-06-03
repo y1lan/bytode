@@ -1,11 +1,14 @@
 //! `SessionRuntime` — the single facade the Agent uses for the session system.
 //!
 //! It composes the store, artifact store, and micro compact policy, and exposes
-//! record / replay / render / micro-compact. It never generates task facts,
-//! never runs an LLM summary, and never judges task completion.
+//! record / replay / render / automatic-micro-compact. It never generates task
+//! facts, never runs an LLM summary, and never judges task completion.
 
 use crate::error::Result;
-use crate::session::compact::{CompactOverlay, MicroCompactPolicy, run_micro_compact};
+use crate::session::compact::{
+    CompactOverlay, MicroCompactPolicy, MicroCompactTriggerReason, estimate_micro_compact,
+    run_micro_compact,
+};
 use crate::session::context::{RenderedEntry, render_context_entries};
 use crate::session::model::{
     ArtifactKind, EntryId, MicroCompactResult, SessionEntry, SessionEntryKind, SessionId,
@@ -14,6 +17,7 @@ use crate::session::model::{
 use crate::session::store::SessionStore;
 use crate::session::store::fs::record_inline_limit;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct SessionRuntime {
     store: SessionStore,
@@ -33,7 +37,17 @@ impl SessionRuntime {
         self.store.session_id()
     }
 
+    /// Override the default policy (primarily for testing).
+    pub fn set_policy(&mut self, policy: MicroCompactPolicy) {
+        self.policy = policy;
+    }
+
+    // ------------------------------------------------------------------
+    // Recording
+    // ------------------------------------------------------------------
+
     pub fn record_user_message(&mut self, content: &str) -> Result<EntryId> {
+        self.store.increment_turns_since_last_micro_compact()?;
         let meta = self.store.next_meta();
         self.store.commit(SessionEntry {
             meta,
@@ -115,9 +129,97 @@ impl SessionRuntime {
         })
     }
 
-    pub fn micro_compact(&mut self) -> Result<MicroCompactResult> {
-        run_micro_compact(&mut self.store, &self.policy)
+    // ------------------------------------------------------------------
+    // Automatic micro compact
+    // ------------------------------------------------------------------
+
+    /// Update `last_model_request_at` after every LLM request completes.
+    pub fn update_last_model_request_at(&mut self) -> Result<()> {
+        self.store.update_last_model_request_at(now_secs())
     }
+
+    /// Per-user-turn trigger. Called once after `record_user_message`, before
+    /// the first LLM request of the turn. Evaluates ColdResume → TurnInterval →
+    /// BloatPressure in order; the first that yields eligible candidates wins.
+    /// Errors from non-ContextPressure triggers are logged, not propagated.
+    pub fn maybe_micro_compact_for_turn(&mut self) -> Result<Option<MicroCompactResult>> {
+        if !self.policy.auto_enabled {
+            return Ok(None);
+        }
+
+        let entries = self.store.replay_entries()?;
+        let overlay = CompactOverlay::from_entries(&entries);
+
+        // ColdResume — cheapest when the prefix cache is already stale.
+        match self.try_cold_resume(&entries, &overlay) {
+            Ok(Some(result)) => return Ok(Some(result)),
+            Ok(None) => {}
+            Err(e) => tracing::error!(%e, "ColdResume micro compact failed"),
+        }
+
+        // TurnInterval — bounded worst-case accumulator.
+        match self.try_turn_interval(&entries, &overlay) {
+            Ok(Some(result)) => return Ok(Some(result)),
+            Ok(None) => {}
+            Err(e) => tracing::error!(%e, "TurnInterval micro compact failed"),
+        }
+
+        // BloatPressure — routine cost optimisation.
+        match self.try_bloat_pressure(&entries, &overlay) {
+            Ok(Some(result)) => return Ok(Some(result)),
+            Ok(None) => {}
+            Err(e) => tracing::error!(%e, "BloatPressure micro compact failed"),
+        }
+
+        Ok(None)
+    }
+
+    /// Per-request trigger for context-pressure. The caller supplies the
+    /// already-computed token estimates so the runtime doesn't need to guess.
+    ///
+    /// ContextPressure can only compact eligible old runtime bloat.
+    /// It cannot rewrite user messages, recent turns, or assistant final
+    /// conclusions. If the context is still too large after micro compact,
+    /// the caller must handle the overflow itself.
+    pub fn maybe_micro_compact_for_request(
+        &mut self,
+        ctx_used: u64,
+        ctx_total: u64,
+    ) -> Result<Option<MicroCompactResult>> {
+        if !self.policy.auto_enabled {
+            return Ok(None);
+        }
+        let ratio = ctx_used as f64 / ctx_total as f64;
+        if ratio < self.policy.context_pressure_ratio {
+            return Ok(None);
+        }
+
+        let entries = self.store.replay_entries()?;
+        let overlay = CompactOverlay::from_entries(&entries);
+        let estimate = estimate_micro_compact(&entries, &overlay, &self.policy);
+        if estimate.compactable_bytes == 0 {
+            return Ok(None);
+        }
+
+        let result = run_micro_compact(&mut self.store, &self.policy)?;
+        if result.compacted_entry_ids.is_empty() {
+            return Ok(None);
+        }
+
+        tracing::info!(
+            reason = ?MicroCompactTriggerReason::ContextPressure,
+            compacted = result.compacted_entry_ids.len(),
+            saved_bytes = result.saved_bytes_estimate,
+            "auto micro compact"
+        );
+        self.store
+            .update_after_micro_compact(result.compact_entry_seq)?;
+        Ok(Some(result))
+    }
+
+    // ------------------------------------------------------------------
+    // Replay / render
+    // ------------------------------------------------------------------
 
     pub fn replay_entries(&self) -> Result<Vec<SessionEntry>> {
         self.store.replay_entries()
@@ -133,4 +235,123 @@ impl SessionRuntime {
             self.store.artifacts(),
         ))
     }
+
+    // ------------------------------------------------------------------
+    // Trigger helpers
+    // ------------------------------------------------------------------
+
+    fn try_cold_resume(
+        &mut self,
+        entries: &[SessionEntry],
+        overlay: &CompactOverlay,
+    ) -> Result<Option<MicroCompactResult>> {
+        let state = self.store.state();
+        let now = now_secs();
+        let threshold = self.policy.cold_resume_after_secs as i64;
+
+        let is_cold = match state.last_model_request_at {
+            None => true,
+            Some(ts) if now.saturating_sub(ts) >= threshold => true,
+            _ => false,
+        };
+        if !is_cold {
+            return Ok(None);
+        }
+
+        let estimate = estimate_micro_compact(entries, overlay, &self.policy);
+        if estimate.compactable_bytes == 0 {
+            return Ok(None);
+        }
+
+        let result = run_micro_compact(&mut self.store, &self.policy)?;
+        if result.compacted_entry_ids.is_empty() {
+            return Ok(None);
+        }
+
+        tracing::info!(
+            reason = ?MicroCompactTriggerReason::ColdResume,
+            compacted = result.compacted_entry_ids.len(),
+            saved_bytes = result.saved_bytes_estimate,
+            "auto micro compact"
+        );
+        self.store
+            .update_after_micro_compact(result.compact_entry_seq)?;
+        Ok(Some(result))
+    }
+
+    fn try_turn_interval(
+        &mut self,
+        entries: &[SessionEntry],
+        overlay: &CompactOverlay,
+    ) -> Result<Option<MicroCompactResult>> {
+        let state = self.store.state();
+        if state.turns_since_last_micro_compact < self.policy.turn_interval {
+            return Ok(None);
+        }
+
+        let estimate = estimate_micro_compact(entries, overlay, &self.policy);
+        if estimate.estimated_saved_bytes == 0 {
+            return Ok(None);
+        }
+
+        let result = run_micro_compact(&mut self.store, &self.policy)?;
+        if result.compacted_entry_ids.is_empty() {
+            return Ok(None);
+        }
+
+        tracing::info!(
+            reason = ?MicroCompactTriggerReason::TurnInterval,
+            compacted = result.compacted_entry_ids.len(),
+            saved_bytes = result.saved_bytes_estimate,
+            "auto micro compact"
+        );
+        self.store
+            .update_after_micro_compact(result.compact_entry_seq)?;
+        Ok(Some(result))
+    }
+
+    fn try_bloat_pressure(
+        &mut self,
+        entries: &[SessionEntry],
+        overlay: &CompactOverlay,
+    ) -> Result<Option<MicroCompactResult>> {
+        let state = self.store.state();
+        let entries_since = match state.last_micro_compact_seq {
+            None => entries.len(),
+            Some(seq) => entries.len().saturating_sub(seq as usize + 1),
+        };
+        if entries_since < self.policy.min_entries_since_last_compact {
+            return Ok(None);
+        }
+
+        let estimate = estimate_micro_compact(entries, overlay, &self.policy);
+        if estimate.compactable_bytes < self.policy.min_compactable_bytes
+            || estimate.estimated_saved_bytes < self.policy.min_saved_bytes
+            || estimate.estimated_compression_ratio < self.policy.min_compression_ratio
+        {
+            return Ok(None);
+        }
+
+        let result = run_micro_compact(&mut self.store, &self.policy)?;
+        if result.compacted_entry_ids.is_empty() {
+            return Ok(None);
+        }
+
+        tracing::info!(
+            reason = ?MicroCompactTriggerReason::BloatPressure,
+            compacted = result.compacted_entry_ids.len(),
+            saved_bytes = result.saved_bytes_estimate,
+            "auto micro compact"
+        );
+        self.store
+            .update_after_micro_compact(result.compact_entry_seq)?;
+        Ok(Some(result))
+    }
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
