@@ -107,6 +107,8 @@ impl SessionRuntime {
     pub fn record_tool_call(
         &mut self,
         tool_name: &str,
+        provider_tool_call_id: Option<String>,
+        tool_call_group_id: Option<String>,
         args: serde_json::Value,
         parent_assistant_entry_id: Option<EntryId>,
     ) -> Result<EntryId> {
@@ -127,6 +129,8 @@ impl SessionRuntime {
             meta,
             kind: SessionEntryKind::ToolCall(ToolCallEntry {
                 tool_name: tool_name.to_string(),
+                provider_tool_call_id,
+                tool_call_group_id,
                 inline_args,
                 arg_artifacts,
                 parent_assistant_entry_id,
@@ -138,6 +142,7 @@ impl SessionRuntime {
     pub fn record_tool_result(
         &mut self,
         call_entry_id: EntryId,
+        tool_call_group_id: Option<String>,
         status: ToolStatus,
         kind: ArtifactKind,
         content: &str,
@@ -155,6 +160,7 @@ impl SessionRuntime {
             meta,
             kind: SessionEntryKind::ToolResult(ToolResultEntry {
                 call_entry_id,
+                tool_call_group_id,
                 status,
                 inline_content,
                 artifacts,

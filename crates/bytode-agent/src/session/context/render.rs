@@ -23,11 +23,13 @@ pub enum RenderedEntry {
     User(String),
     Assistant(String),
     ToolCall {
+        group_id: Option<String>,
         id: String,
         name: String,
         args: serde_json::Value,
     },
     ToolResult {
+        group_id: Option<String>,
         call_id: String,
         content: String,
     },
@@ -45,6 +47,7 @@ pub fn render_context_entries(
 ) -> Result<Vec<RenderedEntry>> {
     let replacements = collect_committed_replacements(entries)?;
     let tool_names = tool_name_index(entries);
+    let tool_call_ids = tool_call_id_index(entries);
     let mut out = Vec::new();
     let mut skip_until: Option<u64> = None;
 
@@ -80,7 +83,11 @@ pub fn render_context_entries(
                     None => archived_args_placeholder(&call.arg_artifacts),
                 };
                 out.push(RenderedEntry::ToolCall {
-                    id: entry.meta.id.0.clone(),
+                    group_id: call.tool_call_group_id.clone(),
+                    id: call
+                        .provider_tool_call_id
+                        .clone()
+                        .unwrap_or_else(|| entry.meta.id.0.clone()),
                     name: call.tool_name.clone(),
                     args,
                 });
@@ -90,9 +97,14 @@ pub fn render_context_entries(
                     .get(&result.call_entry_id)
                     .map(String::as_str)
                     .unwrap_or("");
+                let call_id = tool_call_ids
+                    .get(&result.call_entry_id)
+                    .cloned()
+                    .unwrap_or_else(|| result.call_entry_id.0.clone());
                 let content = render_tool_result(entry, result, tool, overlay, artifacts);
                 out.push(RenderedEntry::ToolResult {
-                    call_id: result.call_entry_id.0.clone(),
+                    group_id: result.tool_call_group_id.clone(),
+                    call_id,
                     content,
                 });
             }
@@ -265,6 +277,21 @@ fn tool_name_index(entries: &[SessionEntry]) -> HashMap<EntryId, String> {
     for entry in entries {
         if let SessionEntryKind::ToolCall(call) = &entry.kind {
             map.insert(entry.meta.id.clone(), call.tool_name.clone());
+        }
+    }
+    map
+}
+
+fn tool_call_id_index(entries: &[SessionEntry]) -> HashMap<EntryId, String> {
+    let mut map = HashMap::new();
+    for entry in entries {
+        if let SessionEntryKind::ToolCall(call) = &entry.kind {
+            map.insert(
+                entry.meta.id.clone(),
+                call.provider_tool_call_id
+                    .clone()
+                    .unwrap_or_else(|| entry.meta.id.0.clone()),
+            );
         }
     }
     map

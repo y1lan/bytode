@@ -17,11 +17,10 @@ use llm::DeepSeekClient;
 use lsp::{LspClient, LspConfig};
 use project::ProjectProfile;
 use std::collections::HashSet;
-use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tools::{
     ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
     cargo::CargoTool,
@@ -48,10 +47,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let log_file = File::create("/tmp/bytode.log").expect("failed to create /tmp/bytode.log");
     tracing_subscriber::fmt()
-        .with_writer(Mutex::new(log_file))
-        .with_ansi(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "bytode=info".into()),

@@ -33,28 +33,7 @@ impl ContextBuilder {
         // Layer 1: Core (prefix-cache anchor)
         let mut messages = vec![llm::build_system_message(&self.core_prompt)];
 
-        for item in rendered {
-            match item {
-                RenderedEntry::User(content) => {
-                    messages.push(llm::build_user_message(content));
-                }
-                RenderedEntry::Assistant(content) => {
-                    messages.push(llm::build_assistant_text_message(content));
-                }
-                RenderedEntry::ToolCall { id, name, args } => {
-                    // Must emit assistant tool_calls before the tool result
-                    let assistant_tc = llm::ToolCall {
-                        id: id.clone(),
-                        name: name.clone(),
-                        arguments: args.clone(),
-                    };
-                    messages.push(llm::build_assistant_tool_call_message(&assistant_tc));
-                }
-                RenderedEntry::ToolResult { call_id, content } => {
-                    messages.push(llm::build_tool_result_message(content, call_id));
-                }
-            }
-        }
+        append_rendered_entries(&mut messages, rendered);
 
         // Layer 2: SOP (conditional)
         if self.last_was_failure {
@@ -91,6 +70,220 @@ impl ContextBuilder {
     pub fn rebuild_core_prompt(&mut self, profile: &ProjectProfile, registry: &ToolRegistry) {
         self.core_prompt = build_core_prompt(profile, registry);
     }
+}
+
+fn append_rendered_entries(
+    messages: &mut Vec<ChatCompletionRequestMessage>,
+    rendered: &[RenderedEntry],
+) {
+    let mut idx = 0usize;
+    while idx < rendered.len() {
+        match &rendered[idx] {
+            RenderedEntry::User(content) => {
+                messages.push(llm::build_user_message(content));
+                idx += 1;
+            }
+            RenderedEntry::Assistant(content) => {
+                messages.push(llm::build_assistant_text_message(content));
+                idx += 1;
+            }
+            RenderedEntry::ToolCall { group_id, .. } => {
+                let mut tool_calls = Vec::new();
+                let mut tool_results = Vec::new();
+                let current_group_id = group_id.clone();
+
+                while idx + 1 < rendered.len() {
+                    let RenderedEntry::ToolCall {
+                        group_id,
+                        id,
+                        name,
+                        args,
+                    } = &rendered[idx]
+                    else {
+                        break;
+                    };
+                    let RenderedEntry::ToolResult {
+                        group_id: result_group_id,
+                        call_id,
+                        content,
+                    } = &rendered[idx + 1]
+                    else {
+                        break;
+                    };
+                    if *group_id != current_group_id || *result_group_id != current_group_id {
+                        break;
+                    }
+
+                    tool_calls.push(llm::ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: args.clone(),
+                    });
+                    tool_results.push((call_id.clone(), content.clone()));
+                    idx += 2;
+                }
+
+                if tool_calls.is_empty() {
+                    idx += 1;
+                    continue;
+                }
+
+                messages.push(llm::build_assistant_tool_calls_message(&tool_calls));
+                for (call_id, content) in tool_results {
+                    messages.push(llm::build_tool_result_message(&content, &call_id));
+                }
+            }
+            RenderedEntry::ToolResult { call_id, content, .. } => {
+                messages.push(llm::build_tool_result_message(content, call_id));
+                idx += 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_rendered_entries;
+    use crate::session::RenderedEntry;
+
+    #[test]
+    fn consecutive_tool_pairs_are_grouped_into_one_assistant_message() {
+        let rendered = vec![
+            RenderedEntry::User("u".into()),
+            RenderedEntry::ToolCall {
+                group_id: Some("g1".into()),
+                id: "call_1".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({"path": "a.rs"}),
+            },
+            RenderedEntry::ToolResult {
+                group_id: Some("g1".into()),
+                call_id: "call_1".into(),
+                content: "a".into(),
+            },
+            RenderedEntry::ToolCall {
+                group_id: Some("g1".into()),
+                id: "call_2".into(),
+                name: "git_status".into(),
+                args: serde_json::json!({}),
+            },
+            RenderedEntry::ToolResult {
+                group_id: Some("g1".into()),
+                call_id: "call_2".into(),
+                content: "b".into(),
+            },
+        ];
+
+        let mut messages = Vec::new();
+        append_rendered_entries(&mut messages, &rendered);
+
+        assert_eq!(messages.len(), 4);
+        let assistant = serde_json::to_value(&messages[1]).unwrap();
+        let tool_calls = assistant
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .expect("assistant tool_calls");
+        assert_eq!(tool_calls.len(), 2);
+        assert_eq!(tool_calls[0].get("id").and_then(|v| v.as_str()), Some("call_1"));
+        assert_eq!(tool_calls[1].get("id").and_then(|v| v.as_str()), Some("call_2"));
+        let tool_1 = serde_json::to_value(&messages[2]).unwrap();
+        let tool_2 = serde_json::to_value(&messages[3]).unwrap();
+        assert_eq!(tool_1.get("tool_call_id").and_then(|v| v.as_str()), Some("call_1"));
+        assert_eq!(tool_2.get("tool_call_id").and_then(|v| v.as_str()), Some("call_2"));
+    }
+
+    #[test]
+    fn different_tool_groups_stay_in_separate_assistant_messages() {
+        let rendered = vec![
+            RenderedEntry::ToolCall {
+                group_id: Some("g1".into()),
+                id: "call_1".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({"path": "a.rs"}),
+            },
+            RenderedEntry::ToolResult {
+                group_id: Some("g1".into()),
+                call_id: "call_1".into(),
+                content: "a".into(),
+            },
+            RenderedEntry::ToolCall {
+                group_id: Some("g2".into()),
+                id: "call_2".into(),
+                name: "git_status".into(),
+                args: serde_json::json!({}),
+            },
+            RenderedEntry::ToolResult {
+                group_id: Some("g2".into()),
+                call_id: "call_2".into(),
+                content: "b".into(),
+            },
+        ];
+
+        let mut messages = Vec::new();
+        append_rendered_entries(&mut messages, &rendered);
+
+        assert_eq!(messages.len(), 4);
+        let assistant_1 = serde_json::to_value(&messages[0]).unwrap();
+        let assistant_2 = serde_json::to_value(&messages[2]).unwrap();
+        assert_eq!(
+            assistant_1
+                .get("tool_calls")
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
+            Some(1)
+        );
+        assert_eq!(
+            assistant_2
+                .get("tool_calls")
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn single_tool_responses_with_different_groups_do_not_merge() {
+        let rendered = vec![
+            RenderedEntry::ToolCall {
+                group_id: Some("g1".into()),
+                id: "call_1".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({"path": "a.rs"}),
+            },
+            RenderedEntry::ToolResult {
+                group_id: Some("g1".into()),
+                call_id: "call_1".into(),
+                content: "a".into(),
+            },
+            RenderedEntry::ToolCall {
+                group_id: Some("g2".into()),
+                id: "call_2".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({"path": "b.rs"}),
+            },
+            RenderedEntry::ToolResult {
+                group_id: Some("g2".into()),
+                call_id: "call_2".into(),
+                content: "b".into(),
+            },
+        ];
+
+        let mut messages = Vec::new();
+        append_rendered_entries(&mut messages, &rendered);
+
+        assert_eq!(messages.len(), 4);
+        for idx in [0usize, 2usize] {
+            let assistant = serde_json::to_value(&messages[idx]).unwrap();
+            assert_eq!(
+                assistant
+                    .get("tool_calls")
+                    .and_then(|v| v.as_array())
+                    .map(|v| v.len()),
+                Some(1)
+            );
+        }
+    }
+
 }
 
 fn build_core_prompt(profile: &ProjectProfile, registry: &ToolRegistry) -> String {

@@ -68,6 +68,8 @@ pub struct AssistantMessageEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallEntry {
     pub tool_name: String,
+    pub provider_tool_call_id: Option<String>,
+    pub tool_call_group_id: Option<String>,
     pub inline_args: Option<serde_json::Value>,
     pub arg_artifacts: Vec<ArtifactRef>,
     pub parent_assistant_entry_id: Option<EntryId>,
@@ -76,6 +78,7 @@ pub struct ToolCallEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultEntry {
     pub call_entry_id: EntryId,
+    pub tool_call_group_id: Option<String>,
     pub status: ToolStatus,
     pub inline_content: Option<String>,
     pub artifacts: Vec<ArtifactRef>,

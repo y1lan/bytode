@@ -28,10 +28,17 @@ fn append_and_replay_round_trips_entries() {
     let (mut rt, _root) = open("append-replay");
     rt.record_user_message("hello").unwrap();
     let call = rt
-        .record_tool_call("read_file", serde_json::json!({"path": "a.rs"}), None)
+        .record_tool_call(
+            "read_file",
+            Some("call_read_file_1".into()),
+            None,
+            serde_json::json!({"path": "a.rs"}),
+            None,
+        )
         .unwrap();
     rt.record_tool_result(
         call,
+        None,
         ToolStatus::Ok,
         ArtifactKind::FileSnapshot,
         "fn main() {}",
@@ -79,10 +86,10 @@ fn artifact_store_write_read_sha256() {
 fn large_tool_result_is_archived() {
     let (mut rt, _root) = open("large-result");
     let call = rt
-        .record_tool_call("web_search", serde_json::json!({"q": "x"}), None)
+        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
         .unwrap();
     let big = "x".repeat(20_000); // > 16 KiB tool output inline limit
-    rt.record_tool_result(call, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
+    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
         .unwrap();
 
     let entries = rt.replay_entries().unwrap();
@@ -98,7 +105,8 @@ fn large_tool_result_is_archived() {
 fn large_tool_call_args_are_archived() {
     let (mut rt, _root) = open("large-args");
     let big_args = serde_json::json!({ "data": "y".repeat(20_000) });
-    rt.record_tool_call("write_file", big_args, None).unwrap();
+    rt.record_tool_call("write_file", None, None, big_args, None)
+        .unwrap();
 
     let entries = rt.replay_entries().unwrap();
     let SessionEntryKind::ToolCall(call) = &entries[0].kind else {
@@ -116,9 +124,15 @@ fn context_is_built_from_session_log() {
     let (mut rt, _root) = open("ctx-phase1");
     rt.record_user_message("do it").unwrap();
     let call = rt
-        .record_tool_call("read_file", serde_json::json!({"path": "a.rs"}), None)
+        .record_tool_call(
+            "read_file",
+            Some("call_read_file_ctx".into()),
+            None,
+            serde_json::json!({"path": "a.rs"}),
+            None,
+        )
         .unwrap();
-    rt.record_tool_result(call, ToolStatus::Ok, ArtifactKind::FileSnapshot, "code")
+    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::FileSnapshot, "code")
         .unwrap();
     rt.record_assistant_message("finished").unwrap();
 
@@ -134,16 +148,17 @@ fn context_is_built_from_session_log() {
         panic!("unexpected shape");
     };
     assert_eq!(id, call_id);
+    assert_eq!(id, "call_read_file_ctx");
 }
 
 #[test]
 fn missing_artifact_renders_error_without_panic() {
     let (mut rt, root) = open("missing-artifact");
     let call = rt
-        .record_tool_call("web_search", serde_json::json!({"q": "x"}), None)
+        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
         .unwrap();
     let big = "x".repeat(20_000);
-    rt.record_tool_result(call, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
+    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
         .unwrap();
 
     // Delete the backing artifact file.
@@ -165,10 +180,10 @@ fn missing_artifact_renders_error_without_panic() {
 fn checksum_mismatch_renders_error_without_panic() {
     let (mut rt, root) = open("checksum-mismatch");
     let call = rt
-        .record_tool_call("web_search", serde_json::json!({"q": "x"}), None)
+        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
         .unwrap();
     let big = "x".repeat(20_000);
-    rt.record_tool_result(call, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
+    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
         .unwrap();
 
     let entries = rt.replay_entries().unwrap();

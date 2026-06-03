@@ -53,6 +53,8 @@ fn build_store(tag: &str) -> (SessionStore, EntryId, EntryId, EntryId) {
         &mut store,
         SessionEntryKind::ToolCall(ToolCallEntry {
             tool_name: "web_search".into(),
+            provider_tool_call_id: None,
+            tool_call_group_id: None,
             inline_args: Some(serde_json::json!({"q": "x"})),
             arg_artifacts: vec![],
             parent_assistant_entry_id: None,
@@ -62,6 +64,7 @@ fn build_store(tag: &str) -> (SessionStore, EntryId, EntryId, EntryId) {
         &mut store,
         SessionEntryKind::ToolResult(ToolResultEntry {
             call_entry_id: call,
+            tool_call_group_id: None,
             status: ToolStatus::Ok,
             inline_content: Some("this inline content is well over ten chars".into()),
             artifacts: vec![],
@@ -199,9 +202,9 @@ fn policy_with_auto(enabled: bool) -> MicroCompactPolicy {
 
 fn record_bloat(rt: &mut SessionRuntime, content: &str) {
     let call = rt
-        .record_tool_call("web_search", serde_json::json!({"q": "x"}), None)
+        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
         .unwrap();
-    rt.record_tool_result(call, ToolStatus::Ok, ArtifactKind::ToolOutput, content)
+    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, content)
         .unwrap();
 }
 
@@ -450,6 +453,8 @@ fn interactive_compact_tail_preserves_micro_compact() {
         &mut store,
         SessionEntryKind::ToolCall(ToolCallEntry {
             tool_name: "web_search".into(),
+            provider_tool_call_id: None,
+            tool_call_group_id: None,
             inline_args: Some(serde_json::json!({"q": "x"})),
             arg_artifacts: vec![],
             parent_assistant_entry_id: None,
@@ -459,6 +464,7 @@ fn interactive_compact_tail_preserves_micro_compact() {
         &mut store,
         SessionEntryKind::ToolResult(ToolResultEntry {
             call_entry_id: EntryId::from_seq(1),
+            tool_call_group_id: None,
             status: ToolStatus::Ok,
             inline_content: Some(
                 "this is a big tool result that is well over the compact threshold".into(),

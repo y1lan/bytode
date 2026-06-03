@@ -155,66 +155,82 @@ impl Agent {
                     }
                     return Ok(AgentOutput::Text(text));
                 }
-                LlmOutput::ToolCall(call) => {
-                    let tool_name = call.name.clone();
-                    let tool_args = call.arguments.clone();
+                LlmOutput::ToolCalls(calls) => {
+                    let tool_call_group_id = Some(format!("tcg-{}", uuid_like_group_id(&calls)));
+                    for call in calls {
+                        let tool_name = call.name.clone();
+                        let tool_args = call.arguments.clone();
 
-                    let args_summary = format_args(&call.name, &call.arguments);
-                    on_text(&format!("\n  ⟳ {}({})\n", tool_name, args_summary));
+                        let args_summary = format_args(&call.name, &call.arguments);
+                        on_text(&format!("\n  ⟳ {}({})\n", tool_name, args_summary));
 
-                    let call_entry_id =
-                        self.runtime
-                            .record_tool_call(&tool_name, tool_args.clone(), None)?;
-                    let tool_ref = self.registry.find(&call.name);
-
-                    let (result, status) = match self.execute_tool(&call).await {
-                        Ok(r) => {
-                            if let Some(tool) = tool_ref {
-                                if let Some(display) = tool.format_result_for_display(&r) {
-                                    on_text(&format!("{}\n", display));
-                                } else {
-                                    on_text("  ok\n");
-                                }
-                            }
-                            (r, ToolStatus::Ok)
-                        }
-                        Err(e) => {
-                            let msg = format!("Error: {}", e);
-                            tracing::error!(tool = %call.name, args = %call.arguments, error = %e, "Tool call failed");
-                            on_text(&format!("{}\n", msg));
-                            consecutive_errors += 1;
-                            let result = ToolResult::Text {
-                                source: "tool_error".into(),
-                                content: msg,
-                                truncated: false,
-                            };
-                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                self.record_tool_result(
-                                    call_entry_id,
+                        let call_entry_id =
+                            self.runtime
+                                .record_tool_call(
                                     &tool_name,
-                                    &result,
-                                    ToolStatus::Error,
+                                    Some(call.id.clone()),
+                                    tool_call_group_id.clone(),
+                                    tool_args.clone(),
+                                    None,
                                 )?;
-                                return Ok(AgentOutput::Text(
-                                    "Too many consecutive tool errors. Stopping.".into(),
-                                ));
+                        let tool_ref = self.registry.find(&call.name);
+
+                        let (result, status) = match self.execute_tool(&call).await {
+                            Ok(r) => {
+                                if let Some(tool) = tool_ref {
+                                    if let Some(display) = tool.format_result_for_display(&r) {
+                                        on_text(&format!("{}\n", display));
+                                    } else {
+                                        on_text("  ok\n");
+                                    }
+                                }
+                                (r, ToolStatus::Ok)
                             }
-                            (result, ToolStatus::Error)
+                            Err(e) => {
+                                let msg = format!("Error: {}", e);
+                                tracing::error!(tool = %call.name, args = %call.arguments, error = %e, "Tool call failed");
+                                on_text(&format!("{}\n", msg));
+                                consecutive_errors += 1;
+                                let result = ToolResult::Text {
+                                    source: "tool_error".into(),
+                                    content: msg,
+                                    truncated: false,
+                                };
+                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    self.record_tool_result(
+                                        call_entry_id,
+                                        tool_call_group_id.clone(),
+                                        &tool_name,
+                                        &result,
+                                        ToolStatus::Error,
+                                    )?;
+                                    return Ok(AgentOutput::Text(
+                                        "Too many consecutive tool errors. Stopping.".into(),
+                                    ));
+                                }
+                                (result, ToolStatus::Error)
+                            }
+                        };
+
+                        self.record_tool_result(
+                            call_entry_id,
+                            tool_call_group_id.clone(),
+                            &tool_name,
+                            &result,
+                            status,
+                        )?;
+
+                        if let Some(t) = self.memory.last_turn_mut() {
+                            t.tool_calls.push(memory::ToolCallRecord {
+                                id: call.id.clone(),
+                                name: tool_name,
+                                arguments: tool_args,
+                                result: result.clone(),
+                            });
                         }
-                    };
 
-                    self.record_tool_result(call_entry_id, &tool_name, &result, status)?;
-
-                    if let Some(t) = self.memory.last_turn_mut() {
-                        t.tool_calls.push(memory::ToolCallRecord {
-                            id: call.id.clone(),
-                            name: tool_name,
-                            arguments: tool_args,
-                            result: result.clone(),
-                        });
+                        self.context.update_last_result(&result);
                     }
-
-                    self.context.update_last_result(&result);
                 }
             }
         }
@@ -225,6 +241,7 @@ impl Agent {
     fn record_tool_result(
         &mut self,
         call_entry_id: crate::session::EntryId,
+        tool_call_group_id: Option<String>,
         tool_name: &str,
         result: &ToolResult,
         status: ToolStatus,
@@ -232,7 +249,7 @@ impl Agent {
         let content = format_tool_result(result);
         let kind = kind_for_tool(tool_name);
         self.runtime
-            .record_tool_result(call_entry_id, status, kind, &content)?;
+            .record_tool_result(call_entry_id, tool_call_group_id, status, kind, &content)?;
         Ok(())
     }
 
@@ -317,10 +334,15 @@ impl Agent {
         let response = self.llm.chat(state.messages.clone(), vec![]).await?;
         let content = match response {
             LlmOutput::Text(t) => t,
-            LlmOutput::ToolCall(call) => {
+            LlmOutput::ToolCalls(calls) => {
+                let names = calls
+                    .into_iter()
+                    .map(|call| call.name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 return Err(crate::error::BytodeError::Session(format!(
-                    "compact session produced unexpected tool call: {}",
-                    call.name
+                    "compact session produced unexpected tool call(s): {}",
+                    names
                 )));
             }
         };
@@ -701,6 +723,13 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         }
         _ => "?".into(),
     }
+}
+
+fn uuid_like_group_id(calls: &[crate::llm::ToolCall]) -> String {
+    calls.first()
+        .map(|call| call.id.replace("call_", ""))
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "group".into())
 }
 
 fn history_tool_part(record: &memory::ToolCallRecord) -> ToolPart {

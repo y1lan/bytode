@@ -12,6 +12,7 @@ use async_openai::{
 };
 use futures::StreamExt;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Token usage from a single API call
@@ -35,7 +36,7 @@ pub struct DeepSeekClient {
 #[derive(Debug, Clone)]
 pub enum LlmOutput {
     Text(String),
-    ToolCall(ToolCall),
+    ToolCalls(Vec<ToolCall>),
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,13 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ToolCallAccumulator {
+    id: String,
+    name: String,
+    arguments_raw: String,
 }
 
 impl ToolCall {
@@ -82,6 +90,7 @@ impl DeepSeekClient {
             .model(&self.model)
             .messages(messages)
             .tools(openai_tools)
+            .parallel_tool_calls(false)
             .max_tokens(self.max_tokens)
             .temperature(0.0_f32)
             .build()
@@ -95,9 +104,7 @@ impl DeepSeekClient {
             .map_err(|e| BytodeError::Llm(format!("stream error: {}", e)))?;
 
         let mut full_text = String::new();
-        let mut tool_call_id = String::new();
-        let mut tool_call_name = String::new();
-        let mut tool_call_args = String::new();
+        let mut tool_calls: BTreeMap<u32, ToolCallAccumulator> = BTreeMap::new();
         let mut usage = TokenUsage::default();
 
         while let Some(chunk) = stream.next().await {
@@ -118,18 +125,18 @@ impl DeepSeekClient {
 
                 if let Some(ref tc_deltas) = choice.delta.tool_calls {
                     for tc in tc_deltas {
+                        let entry = tool_calls.entry(tc.index).or_default();
                         if let Some(ref id) = tc.id {
-                            tool_call_id = id.clone();
+                            entry.id = id.clone();
                         }
                         if let Some(ref func) = tc.function {
                             if let Some(ref name) = func.name {
-                                tool_call_name = name.clone();
+                                entry.name = name.clone();
                             }
                             if let Some(ref args) = func.arguments {
-                                tracing::debug!("tool_call_args chunk: {:?}", args);
-                                tool_call_args.push_str(args);
+                                entry.arguments_raw.push_str(args);
                             } else {
-                                tracing::error!("tool_call no arguments field in chunk");
+                                tracing::error!(index = tc.index, "tool_call no arguments field in chunk");
                             }
                         }
                     }
@@ -158,88 +165,29 @@ impl DeepSeekClient {
             self.session_cost(),
         );
 
-        if !tool_call_name.is_empty() {
-            let arguments: Value = if tool_call_args.is_empty() {
-                tracing::error!("tool_call '{}' has empty arguments", tool_call_name);
-                Value::Null
-            } else {
-                match serde_json::from_str(&tool_call_args) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::error!(
-                            "tool_call '{}' args parse error: {} raw={:?}",
-                            tool_call_name,
-                            e,
-                            tool_call_args
-                        );
-                        // Try to extract all JSON objects — LLM sometimes concatenates multiple calls
-                        // Pick the one with the most keys (most complete)
-                        if e.to_string().contains("trailing characters") {
-                            let mut objs: Vec<Value> = Vec::new();
-                            let mut pos = 0;
-                            let bytes = tool_call_args.as_bytes();
-                            while pos < bytes.len() {
-                                // Skip non-{ chars
-                                while pos < bytes.len() && bytes[pos] != b'{' {
-                                    pos += 1;
-                                }
-                                if pos >= bytes.len() {
-                                    break;
-                                }
-                                let mut depth = 0u32;
-                                let start = pos;
-                                while pos < bytes.len() {
-                                    match bytes[pos] {
-                                        b'{' => depth += 1,
-                                        b'}' => {
-                                            depth -= 1;
-                                            if depth == 0 {
-                                                let slice = &tool_call_args[start..=pos];
-                                                if let Ok(v) = serde_json::from_str::<Value>(slice)
-                                                {
-                                                    objs.push(v);
-                                                }
-                                                pos += 1;
-                                                break;
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                    pos += 1;
-                                }
-                            }
-                            if !objs.is_empty() {
-                                // Pick the object with the most keys (most complete)
-                                objs.sort_by(|a, b| {
-                                    let ka = a.as_object().map(|o| o.len()).unwrap_or(0);
-                                    let kb = b.as_object().map(|o| o.len()).unwrap_or(0);
-                                    kb.cmp(&ka)
-                                });
-                                let best = objs.into_iter().next().unwrap();
-                                tracing::info!(
-                                    "tool_call '{}' extracted best args from concatenated JSON: {:?}",
-                                    tool_call_name,
-                                    best
-                                );
-                                return Ok(LlmOutput::ToolCall(ToolCall {
-                                    id: tool_call_id,
-                                    name: tool_call_name,
-                                    arguments: best,
-                                }));
-                            }
-                        }
-                        Value::Null
+        if !tool_calls.is_empty() {
+            let parsed_calls = tool_calls
+                .into_iter()
+                .map(|(index, tool_call)| {
+                    let arguments =
+                        parse_tool_call_arguments(index, &tool_call.name, &tool_call.arguments_raw);
+
+                    tracing::info!(
+                        index,
+                        name = tool_call.name,
+                        args = ?arguments,
+                        "tool_call"
+                    );
+
+                    ToolCall {
+                        id: tool_call.id,
+                        name: tool_call.name,
+                        arguments,
                     }
-                }
-            };
+                })
+                .collect::<Vec<_>>();
 
-            tracing::info!("tool_call: name={} args={:?}", tool_call_name, arguments);
-
-            return Ok(LlmOutput::ToolCall(ToolCall {
-                id: tool_call_id,
-                name: tool_call_name,
-                arguments,
-            }));
+            return Ok(LlmOutput::ToolCalls(parsed_calls));
         }
 
         Ok(LlmOutput::Text(full_text))
@@ -287,6 +235,27 @@ impl DeepSeekClient {
     }
 }
 
+fn parse_tool_call_arguments(index: u32, tool_call_name: &str, tool_call_args: &str) -> Value {
+    if tool_call_args.is_empty() {
+        tracing::error!(index, "tool_call '{}' has empty arguments", tool_call_name);
+        return Value::Null;
+    }
+
+    match serde_json::from_str(tool_call_args) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                index,
+                "tool_call '{}' args parse error: {} raw={:?}",
+                tool_call_name,
+                e,
+                tool_call_args
+            );
+            Value::Null
+        }
+    }
+}
+
 /// Estimate cost in USD based on DeepSeek pricing
 ///   Input:  ~$0.27 / 1M tokens (cache miss)
 ///   Output: ~$1.10 / 1M tokens
@@ -324,23 +293,31 @@ pub fn build_tool_result_message(
         .into()
 }
 
-pub fn build_assistant_tool_call_message(tool_call: &ToolCall) -> ChatCompletionRequestMessage {
-    let tc_json = serde_json::json!({
-        "id": tool_call.id,
-        "type": "function",
-        "function": {
-            "name": tool_call.name,
-            "arguments": tool_call.arguments.to_string(),
-        }
-    });
-    let tc: async_openai::types::ChatCompletionMessageToolCall =
-        serde_json::from_value(tc_json).expect("valid tool call JSON");
+pub fn build_assistant_tool_calls_message(tool_calls: &[ToolCall]) -> ChatCompletionRequestMessage {
+    let calls = tool_calls
+        .iter()
+        .map(|tool_call| {
+            let tc_json = serde_json::json!({
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments.to_string(),
+                }
+            });
+            serde_json::from_value(tc_json).expect("valid tool call JSON")
+        })
+        .collect::<Vec<async_openai::types::ChatCompletionMessageToolCall>>();
 
     ChatCompletionRequestAssistantMessageArgs::default()
-        .tool_calls(vec![tc])
+        .tool_calls(calls)
         .build()
         .unwrap()
         .into()
+}
+
+pub fn build_assistant_tool_call_message(tool_call: &ToolCall) -> ChatCompletionRequestMessage {
+    build_assistant_tool_calls_message(std::slice::from_ref(tool_call))
 }
 
 pub fn build_assistant_text_message(content: &str) -> ChatCompletionRequestMessage {
