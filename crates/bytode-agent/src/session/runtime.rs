@@ -11,8 +11,8 @@ use crate::session::compact::{
 };
 use crate::session::context::{RenderedEntry, render_context_entries};
 use crate::session::model::{
-    ArtifactKind, EntryId, MicroCompactResult, SessionEntry, SessionEntryKind, SessionId,
-    ToolCallEntry, ToolResultEntry, ToolStatus,
+    ArtifactKind, ArtifactRef, EntryId, EntryMeta, MicroCompactResult, SessionEntry,
+    SessionEntryKind, SessionId, ToolCallEntry, ToolResultEntry, ToolStatus,
 };
 use crate::session::store::SessionStore;
 use crate::session::store::fs::record_inline_limit;
@@ -40,6 +40,32 @@ impl SessionRuntime {
     /// Override the default policy (primarily for testing).
     pub fn set_policy(&mut self, policy: MicroCompactPolicy) {
         self.policy = policy;
+    }
+
+    pub fn policy(&self) -> &MicroCompactPolicy {
+        &self.policy
+    }
+
+    /// Expose the next entry meta without bumping seq (for artifact writes
+    /// that precede entry commits, e.g. evidence packs).
+    pub fn store_next_meta(&self) -> EntryMeta {
+        self.store.next_meta()
+    }
+
+    /// Write an artifact without committing a log entry. The returned
+    /// `ArtifactRef` can later be embedded in a committed entry.
+    pub fn write_artifact(
+        &mut self,
+        meta: &EntryMeta,
+        kind: ArtifactKind,
+        content: &str,
+    ) -> Result<ArtifactRef> {
+        self.store.artifacts().write(meta, kind, content)
+    }
+
+    /// Commit a fully-built entry (used by interactive compact).
+    pub fn commit_entry(&mut self, entry: SessionEntry) -> Result<EntryId> {
+        self.store.commit(entry)
     }
 
     // ------------------------------------------------------------------
