@@ -1,13 +1,12 @@
-use crate::agent::memory::{MemoryLayer, Turn};
 use crate::llm;
 use crate::project::ProjectProfile;
+use crate::session::RenderedEntry;
 use crate::tools::{ToolRegistry, ToolResult};
 use async_openai::types::ChatCompletionRequestMessage;
 
 pub struct ContextBuilder {
     core_prompt: String,
     sop_prompt: String,
-    pub memory: MemoryLayer,
     last_was_failure: bool,
     ctx_total: u64,
     ctx_used: u64,
@@ -21,49 +20,40 @@ impl ContextBuilder {
         ContextBuilder {
             core_prompt,
             sop_prompt,
-            memory: MemoryLayer::new(10),
             last_was_failure: false,
             ctx_total: 1_000_000,
             ctx_used: 0,
         }
     }
 
-    pub fn build(&mut self, turn: &Turn) -> Vec<ChatCompletionRequestMessage> {
-        let mut messages = Vec::new();
-
+    /// Build the request messages from session-log-derived context items. The
+    /// rendered slice is a full replay (already overlay-applied); nothing is
+    /// dropped here.
+    pub fn build(&mut self, rendered: &[RenderedEntry]) -> Vec<ChatCompletionRequestMessage> {
         // Layer 1: Core (prefix-cache anchor)
-        messages.push(llm::build_system_message(&self.core_prompt));
+        let mut messages = vec![llm::build_system_message(&self.core_prompt)];
 
-        // Layer 3: Compressed summary
-        if let Some(summary) = self.memory.summary() {
-            messages.push(llm::build_system_message(summary));
-        }
-
-        // Layer 3: Recent turns
-        for t in self.memory.recent_turns() {
-            if let Some(ref input) = t.user_input {
-                messages.push(llm::build_user_message(input));
+        for item in rendered {
+            match item {
+                RenderedEntry::User(content) => {
+                    messages.push(llm::build_user_message(content));
+                }
+                RenderedEntry::Assistant(content) => {
+                    messages.push(llm::build_assistant_text_message(content));
+                }
+                RenderedEntry::ToolCall { id, name, args } => {
+                    // Must emit assistant tool_calls before the tool result
+                    let assistant_tc = llm::ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: args.clone(),
+                    };
+                    messages.push(llm::build_assistant_tool_call_message(&assistant_tc));
+                }
+                RenderedEntry::ToolResult { call_id, content } => {
+                    messages.push(llm::build_tool_result_message(content, call_id));
+                }
             }
-            for record in &t.tool_calls {
-                // Must emit assistant tool_calls before the tool result
-                let assistant_tc = llm::ToolCall {
-                    id: record.id.clone(),
-                    name: record.name.clone(),
-                    arguments: record.arguments.clone(),
-                };
-                messages.push(llm::build_assistant_tool_call_message(&assistant_tc));
-
-                let result_text = format_tool_result(&record.result);
-                messages.push(llm::build_tool_result_message(&result_text, &record.id));
-            }
-            if let Some(ref text) = t.assistant_text {
-                messages.push(llm::build_assistant_text_message(text));
-            }
-        }
-
-        // Current user input
-        if let Some(ref input) = turn.user_input {
-            messages.push(llm::build_user_message(input));
         }
 
         // Layer 2: SOP (conditional)
@@ -76,15 +66,10 @@ impl ContextBuilder {
         self.ctx_used = messages
             .iter()
             .map(|m| {
-                // Serialize each message to JSON string and count chars
                 let json_str = serde_json::to_string(m).unwrap_or_default();
                 json_str.len() as u64 / 4
             })
             .sum();
-
-        if self.memory.should_compress(self.ctx_used, self.ctx_total) {
-            self.memory.compress();
-        }
 
         messages
     }
@@ -170,7 +155,7 @@ When you believe all errors are fixed:
         .to_string()
 }
 
-fn format_tool_result(result: &ToolResult) -> String {
+pub(crate) fn format_tool_result(result: &ToolResult) -> String {
     match result {
         ToolResult::FileContent {
             path,
