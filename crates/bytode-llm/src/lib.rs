@@ -1,12 +1,14 @@
+pub use bytode_common::error;
+
 use crate::error::{BytodeError, Result};
 use async_openai::{
+    Client,
     config::OpenAIConfig,
     types::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
         ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
     },
-    Client,
 };
 use futures::StreamExt;
 use serde_json::Value;
@@ -53,9 +55,7 @@ impl DeepSeekClient {
     pub fn new(api_key: String, model: String, base_url: Option<String>) -> Result<Self> {
         let config = OpenAIConfig::default()
             .with_api_key(api_key)
-            .with_api_base(
-                base_url.unwrap_or_else(|| "https://api.deepseek.com/v1".into()),
-            );
+            .with_api_base(base_url.unwrap_or_else(|| "https://api.deepseek.com/v1".into()));
 
         Ok(DeepSeekClient {
             client: Client::with_config(config),
@@ -168,7 +168,9 @@ impl DeepSeekClient {
                     Err(e) => {
                         tracing::error!(
                             "tool_call '{}' args parse error: {} raw={:?}",
-                            tool_call_name, e, tool_call_args
+                            tool_call_name,
+                            e,
+                            tool_call_args
                         );
                         // Try to extract all JSON objects — LLM sometimes concatenates multiple calls
                         // Pick the one with the most keys (most complete)
@@ -193,7 +195,8 @@ impl DeepSeekClient {
                                             depth -= 1;
                                             if depth == 0 {
                                                 let slice = &tool_call_args[start..=pos];
-                                                if let Ok(v) = serde_json::from_str::<Value>(slice) {
+                                                if let Ok(v) = serde_json::from_str::<Value>(slice)
+                                                {
                                                     objs.push(v);
                                                 }
                                                 pos += 1;
@@ -215,7 +218,8 @@ impl DeepSeekClient {
                                 let best = objs.into_iter().next().unwrap();
                                 tracing::info!(
                                     "tool_call '{}' extracted best args from concatenated JSON: {:?}",
-                                    tool_call_name, best
+                                    tool_call_name,
+                                    best
                                 );
                                 return Ok(LlmOutput::ToolCall(ToolCall {
                                     id: tool_call_id,
@@ -229,10 +233,7 @@ impl DeepSeekClient {
                 }
             };
 
-            tracing::info!(
-                "tool_call: name={} args={:?}",
-                tool_call_name, arguments
-            );
+            tracing::info!("tool_call: name={} args={:?}", tool_call_name, arguments);
 
             return Ok(LlmOutput::ToolCall(ToolCall {
                 id: tool_call_id,

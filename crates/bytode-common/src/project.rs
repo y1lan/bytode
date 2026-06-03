@@ -182,10 +182,7 @@ impl ProjectProfile {
             .collect();
 
         let primary_marker = confirmed.first().ok_or_else(|| {
-            BytodeError::ProjectDetection(format!(
-                "no project markers found in {}",
-                root.display()
-            ))
+            BytodeError::ProjectDetection(format!("no project markers found in {}", root.display()))
         })?;
 
         let all_languages: Vec<Language> = {
@@ -227,7 +224,7 @@ impl ProjectProfile {
                 return Err(BytodeError::ProjectDetection(format!(
                     "unsupported language override: {}",
                     other
-                )))
+                )));
             }
         };
 
@@ -308,9 +305,7 @@ impl ProjectProfile {
                                     entries
                                         .filter_map(|e| e.ok())
                                         .filter(|e| {
-                                            e.file_type()
-                                                .map(|t| t.is_dir())
-                                                .unwrap_or(false)
+                                            e.file_type().map(|t| t.is_dir()).unwrap_or(false)
                                         })
                                         .filter(|e| e.path().join("Cargo.toml").exists())
                                         .map(|e| e.path())

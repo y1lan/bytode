@@ -8,7 +8,10 @@ pub enum ToolSelection {
     /// User provided an exact list — use it verbatim
     Exact { enabled: Vec<String> },
     /// User extended or trimmed the defaults
-    Additive { enable: Vec<String>, disable: Vec<String> },
+    Additive {
+        enable: Vec<String>,
+        disable: Vec<String>,
+    },
     /// No user config — use project-detected defaults
     None,
 }
@@ -66,9 +69,15 @@ impl Default for RawSearchConfig {
     }
 }
 
-fn default_search_engine() -> String { "ripgrep".into() }
-fn default_ignore_dirs() -> Vec<String> { vec!["target".into(), ".git".into()] }
-fn default_max_results() -> usize { 200 }
+fn default_search_engine() -> String {
+    "ripgrep".into()
+}
+fn default_ignore_dirs() -> Vec<String> {
+    vec!["target".into(), ".git".into()]
+}
+fn default_max_results() -> usize {
+    200
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawWebSearchConfig {
@@ -86,7 +95,9 @@ impl Default for RawWebSearchConfig {
     }
 }
 
-fn default_web_timeout() -> u64 { 15 }
+fn default_web_timeout() -> u64 {
+    15
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawCargoConfig {
@@ -102,7 +113,9 @@ impl Default for RawCargoConfig {
     }
 }
 
-fn default_cargo_timeout() -> u64 { 120_000 }
+fn default_cargo_timeout() -> u64 {
+    120_000
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawAgentConfig {
@@ -114,8 +127,12 @@ pub struct RawAgentConfig {
     pub auto_check_after_write: bool,
 }
 
-fn default_true() -> bool { true }
-fn default_max_consecutive() -> u32 { 20 }
+fn default_true() -> bool {
+    true
+}
+fn default_max_consecutive() -> u32 {
+    20
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawSecurityConfig {
@@ -125,8 +142,12 @@ pub struct RawSecurityConfig {
     pub forbidden_write_patterns: Vec<String>,
 }
 
-fn default_max_file_size() -> u64 { 1_048_576 }
-fn default_forbidden() -> Vec<String> { vec!["/etc/*".into()] }
+fn default_max_file_size() -> u64 {
+    1_048_576
+}
+fn default_forbidden() -> Vec<String> {
+    vec!["/etc/*".into()]
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -183,16 +204,18 @@ impl Config {
         // Layer 2: user config (~/.config/bytode.toml)
         if let Some(user_path) = user_config_path()
             && user_path.exists()
-                && let Some(raw) = Self::read_file(&user_path)? {
-                    config.merge(raw);
-                }
+            && let Some(raw) = Self::read_file(&user_path)?
+        {
+            config.merge(raw);
+        }
 
         // Layer 3: project config (<root>/.bytode.toml)
         let project_config_path = project_root.join(".bytode.toml");
         if project_config_path.exists()
-            && let Some(raw) = Self::read_file(&project_config_path)? {
-                config.merge(raw);
-            }
+            && let Some(raw) = Self::read_file(&project_config_path)?
+        {
+            config.merge(raw);
+        }
 
         config.apply_hard_constraints();
         Ok(config)
@@ -202,7 +225,13 @@ impl Config {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(BytodeError::Config(format!("read {}: {}", path.display(), e))),
+            Err(e) => {
+                return Err(BytodeError::Config(format!(
+                    "read {}: {}",
+                    path.display(),
+                    e
+                )));
+            }
         };
         let raw: RawConfig = toml::from_str(&content)
             .map_err(|e| BytodeError::Config(format!("parse {}: {}", path.display(), e)))?;
@@ -211,7 +240,10 @@ impl Config {
 
     fn merge(&mut self, raw: RawConfig) {
         if let Some(p) = raw.project
-            && let Some(lang) = p.lang { self.project_lang_override = Some(lang); }
+            && let Some(lang) = p.lang
+        {
+            self.project_lang_override = Some(lang);
+        }
         if let Some(b) = raw.build {
             self.build.extra_check_flags = b.extra_check_flags;
         }
@@ -241,7 +273,9 @@ impl Config {
         }
         if let Some(s) = raw.security {
             self.security.max_file_size = s.max_file_size;
-            self.security.forbidden_write_patterns.extend(s.forbidden_write_patterns);
+            self.security
+                .forbidden_write_patterns
+                .extend(s.forbidden_write_patterns);
         }
     }
 
