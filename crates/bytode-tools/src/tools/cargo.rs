@@ -1,5 +1,5 @@
 use crate::error::{BytodeError, Result};
-use crate::tools::{Tool, ToolResult, ToolAvailability, ToolCategory};
+use crate::tools::{Tool, ToolAvailability, ToolCategory, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const WHITELISTED_SUBCOMMANDS: &[&str] = &[
-    "check", "build", "test", "clippy", "fmt",
-    "doc", "bench", "run", "clean", "update",
+    "check", "build", "test", "clippy", "fmt", "doc", "bench", "run", "clean", "update",
 ];
 
 pub struct CargoTool {
@@ -135,7 +134,9 @@ impl CargoTool {
         crate::tools::ToolEntry {
             tool: Box::new(CargoTool { project_root }),
             category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage { requires: &["rust"] },
+            availability: ToolAvailability::PrimaryLanguage {
+                requires: &["rust"],
+            },
         }
     }
 }

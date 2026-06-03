@@ -39,7 +39,9 @@ RETURNS: git status --porcelain output, or "clean" if no changes."#
         })
     }
 
-    fn timeout_ms(&self) -> u64 { 10_000 }
+    fn timeout_ms(&self) -> u64 {
+        10_000
+    }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let mut cmd = Command::new("git");
@@ -116,14 +118,20 @@ RETURNS: unified diff output."#
         })
     }
 
-    fn timeout_ms(&self) -> u64 { 15_000 }
+    fn timeout_ms(&self) -> u64 {
+        15_000
+    }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let mut cmd = Command::new("git");
         cmd.current_dir(&self.project_root);
         cmd.arg("diff");
 
-        if args.get("staged").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if args
+            .get("staged")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             cmd.arg("--cached");
         }
 
@@ -194,7 +202,9 @@ RETURNS: one line per commit (short hash + message)."#
         })
     }
 
-    fn timeout_ms(&self) -> u64 { 10_000 }
+    fn timeout_ms(&self) -> u64 {
+        10_000
+    }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let mut cmd = Command::new("git");
@@ -343,7 +353,11 @@ RETURNS: commit summary (hash + message) or error if nothing to commit."#
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if !output.status.success() {
-            let detail = if stderr.trim().is_empty() { &stdout } else { &stderr };
+            let detail = if stderr.trim().is_empty() {
+                &stdout
+            } else {
+                &stderr
+            };
             return Err(BytodeError::Tool {
                 tool: "git_commit".into(),
                 message: format!("commit failed: {}", detail.trim()),
@@ -358,7 +372,11 @@ RETURNS: commit summary (hash + message) or error if nothing to commit."#
 
         Ok(ToolResult::Text {
             source: "git_commit".into(),
-            content: if content.is_empty() { "committed successfully".into() } else { content },
+            content: if content.is_empty() {
+                "committed successfully".into()
+            } else {
+                content
+            },
             truncated: false,
         })
     }
@@ -447,7 +465,11 @@ RETURNS: push output from git."#
             cmd.arg("--force");
         }
 
-        if args.get("set_upstream").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if args
+            .get("set_upstream")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             cmd.arg("-u");
         }
 
@@ -465,7 +487,11 @@ RETURNS: push output from git."#
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if !output.status.success() {
-            let detail = if stderr.trim().is_empty() { &stdout } else { &stderr };
+            let detail = if stderr.trim().is_empty() {
+                &stdout
+            } else {
+                &stderr
+            };
             return Err(BytodeError::Tool {
                 tool: "git_push".into(),
                 message: format!("push failed: {}", detail.trim()),

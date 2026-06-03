@@ -112,11 +112,10 @@ impl ReadFileTool {
             self.project_root.join(path)
         };
 
-        let canonical =
-            std::fs::canonicalize(&resolved).map_err(|_| BytodeError::Tool {
-                tool: "read_file".into(),
-                message: format!("path does not exist: {}", resolved.display()),
-            })?;
+        let canonical = std::fs::canonicalize(&resolved).map_err(|_| BytodeError::Tool {
+            tool: "read_file".into(),
+            message: format!("path does not exist: {}", resolved.display()),
+        })?;
 
         if !canonical.starts_with(&self.project_root) {
             return Err(BytodeError::Tool {
@@ -157,11 +156,7 @@ impl ReadFileTool {
         }
         entries.sort();
 
-        let content = format!(
-            "{}/\n{}",
-            dir.to_string_lossy(),
-            entries.join("\n")
-        );
+        let content = format!("{}/\n{}", dir.to_string_lossy(), entries.join("\n"));
 
         Ok(ToolResult::Text {
             source: "read_file".into(),
@@ -235,11 +230,14 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
     }
 
     fn format_result_for_display(&self, result: &ToolResult) -> Option<String> {
-        if let ToolResult::WriteConfirmation { path, diff, bytes_written, lines } = result {
-            let short = path.replace(
-                &std::env::var("HOME").unwrap_or_default(),
-                "~",
-            );
+        if let ToolResult::WriteConfirmation {
+            path,
+            diff,
+            bytes_written,
+            lines,
+        } = result
+        {
+            let short = path.replace(&std::env::var("HOME").unwrap_or_default(), "~");
             if diff.starts_with("new file:") {
                 Some(format!("  {} ({}, {} lines)", diff, bytes_written, lines))
             } else {
@@ -252,7 +250,12 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
                 for l in &changed {
                     s.push_str(&format!("  {}\n", l));
                 }
-                if diff.lines().filter(|l| l.starts_with('-') || l.starts_with('+')).count() > 40 {
+                if diff
+                    .lines()
+                    .filter(|l| l.starts_with('-') || l.starts_with('+'))
+                    .count()
+                    > 40
+                {
                     s.push_str("  ...\n");
                 }
                 Some(s)
@@ -337,11 +340,7 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
 
         let diff = match &old_content {
             Some(old) => compute_unified_diff(old, content, &path_s),
-            None => format!(
-                "new file: {} ({} lines)",
-                path_s,
-                content.lines().count()
-            ),
+            None => format!("new file: {} ({} lines)", path_s, content.lines().count()),
         };
 
         Ok(ToolResult::WriteConfirmation {
@@ -374,15 +373,11 @@ fn compute_unified_diff(old: &str, new: &str, filename: &str) -> String {
             continue;
         }
 
-        if i < old_lines.len()
-            && (j >= new_lines.len() || old_line != new_line)
-        {
+        if i < old_lines.len() && (j >= new_lines.len() || old_line != new_line) {
             diff.push(format!("-{}", old_line));
             i += 1;
         }
-        if j < new_lines.len()
-            && (i >= old_lines.len() || old_lines.get(i) != Some(&new_line))
-        {
+        if j < new_lines.len() && (i >= old_lines.len() || old_lines.get(i) != Some(&new_line)) {
             diff.push(format!("+{}", new_line));
             j += 1;
         }

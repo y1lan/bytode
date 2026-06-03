@@ -1,11 +1,11 @@
 use crate::error::{BytodeError, Result};
-use crate::lsp::types::Diagnostic;
+use crate::types::Diagnostic;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -52,7 +52,10 @@ impl LspClient {
             .spawn()
             .map_err(|e| BytodeError::Lsp(format!("launch rust-analyzer: {}", e)))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| BytodeError::Lsp("no stdin".into()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| BytodeError::Lsp("no stdin".into()))?;
         let stdout_opt = child.stdout.take();
 
         let mut proc = LspProcess {
@@ -127,7 +130,10 @@ impl LspClient {
             }
 
             // Spawn background reader for diagnostics
-            tokio::spawn(read_diagnostics_loop(reader, Arc::clone(&self.diagnostics_cache)));
+            tokio::spawn(read_diagnostics_loop(
+                reader,
+                Arc::clone(&self.diagnostics_cache),
+            ));
         }
 
         *guard = Some(proc);
@@ -269,31 +275,36 @@ async fn read_diagnostics_loop(
             Err(_) => continue,
         };
 
-        if message.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics") {
+        if message.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics")
+        {
             let params = &message["params"];
             let uri = params["uri"].as_str().unwrap_or("");
 
-            let path = uri.strip_prefix("file://")
+            let path = uri
+                .strip_prefix("file://")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(uri));
 
             let diags: Vec<Diagnostic> = params["diagnostics"]
                 .as_array()
                 .map(|arr| {
-                    arr.iter().map(|d| Diagnostic {
-                        file: path.to_string_lossy().to_string(),
-                        line: d["range"]["start"]["line"].as_u64().unwrap_or(0) as u32 + 1,
-                        column: d["range"]["start"]["character"].as_u64().unwrap_or(0) as u32,
-                        severity: match d["severity"].as_u64() {
-                            Some(1) => "error",
-                            Some(2) => "warning",
-                            Some(3) => "info",
-                            Some(4) => "hint",
-                            _ => "unknown",
-                        }.to_string(),
-                        message: d["message"].as_str().unwrap_or("").to_string(),
-                        code: d.get("code").and_then(|c| c.as_str()).map(String::from),
-                    }).collect()
+                    arr.iter()
+                        .map(|d| Diagnostic {
+                            file: path.to_string_lossy().to_string(),
+                            line: d["range"]["start"]["line"].as_u64().unwrap_or(0) as u32 + 1,
+                            column: d["range"]["start"]["character"].as_u64().unwrap_or(0) as u32,
+                            severity: match d["severity"].as_u64() {
+                                Some(1) => "error",
+                                Some(2) => "warning",
+                                Some(3) => "info",
+                                Some(4) => "hint",
+                                _ => "unknown",
+                            }
+                            .to_string(),
+                            message: d["message"].as_str().unwrap_or("").to_string(),
+                            code: d.get("code").and_then(|c| c.as_str()).map(String::from),
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
 

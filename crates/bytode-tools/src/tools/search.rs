@@ -57,14 +57,29 @@ RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}
     }
 
     fn format_result_for_display(&self, result: &ToolResult) -> Option<String> {
-        if let ToolResult::Matches { pattern, count, items, truncated } = result {
-            let mut s = format!("  {} match{} for \"{}\"\n", count, if *count == 1 { "" } else { "es" }, pattern);
+        if let ToolResult::Matches {
+            pattern,
+            count,
+            items,
+            truncated,
+        } = result
+        {
+            let mut s = format!(
+                "  {} match{} for \"{}\"\n",
+                count,
+                if *count == 1 { "" } else { "es" },
+                pattern
+            );
             for m in items.iter().take(5) {
-                let file = m.file.replace(
-                    &std::env::var("HOME").unwrap_or_default(),
-                    "~",
-                );
-                s.push_str(&format!("  {}:{} {}...\n", file, m.line, m.text.chars().take(60).collect::<String>()));
+                let file = m
+                    .file
+                    .replace(&std::env::var("HOME").unwrap_or_default(), "~");
+                s.push_str(&format!(
+                    "  {}:{} {}...\n",
+                    file,
+                    m.line,
+                    m.text.chars().take(60).collect::<String>()
+                ));
             }
             if items.len() > 5 {
                 s.push_str(&format!("  ... and {} more", items.len() - 5));
@@ -122,7 +137,10 @@ RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}
                 Some(MatchItem {
                     file: data["path"]["text"].as_str()?.to_string(),
                     line: data["line_number"].as_u64()? as u32,
-                    column: data["absolute_offset"].as_u64().map(|o| o as u32).unwrap_or(0),
+                    column: data["absolute_offset"]
+                        .as_u64()
+                        .map(|o| o as u32)
+                        .unwrap_or(0),
                     text: data["lines"]["text"].as_str()?.trim_end().to_string(),
                 })
             })

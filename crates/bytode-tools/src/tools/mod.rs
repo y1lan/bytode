@@ -169,9 +169,9 @@ impl ToolRegistry {
                 ToolAvailability::PrimaryLanguage { requires } => {
                     requires.contains(&primary_language)
                 }
-                ToolAvailability::DetectedLanguage { languages } => languages
-                    .iter()
-                    .any(|l| detected_languages.contains(*l)),
+                ToolAvailability::DetectedLanguage { languages } => {
+                    languages.iter().any(|l| detected_languages.contains(*l))
+                }
             };
 
             let user_added = enabled.contains(&name);

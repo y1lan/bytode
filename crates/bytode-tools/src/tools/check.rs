@@ -71,11 +71,8 @@ RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }
                 let msg = &v["message"];
                 let spans = &msg["spans"];
                 let primary_span = spans.as_array().and_then(|s| {
-                    s.iter().find(|sp| {
-                        sp.get("is_primary")
-                            .and_then(|p| p.as_bool())
-                            == Some(true)
-                    })
+                    s.iter()
+                        .find(|sp| sp.get("is_primary").and_then(|p| p.as_bool()) == Some(true))
                 });
 
                 let code = msg["code"]
@@ -149,10 +146,7 @@ pub(crate) fn apply_simple_filter(data: &[Value], filter: &str) -> Vec<Value> {
             // Simple field == value filter: .severity == "error"
             let parts: Vec<&str> = f.splitn(2, "==").collect();
             if parts.len() == 2 {
-                let field = parts[0]
-                    .trim()
-                    .strip_prefix('.')
-                    .unwrap_or(parts[0].trim());
+                let field = parts[0].trim().strip_prefix('.').unwrap_or(parts[0].trim());
                 let value = parts[1].trim().trim_matches('"');
                 data.iter()
                     .filter(|v| v[field].as_str() == Some(value))

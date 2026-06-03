@@ -1,5 +1,5 @@
 use crate::error::{BytodeError, Result};
-use crate::tools::{Tool, ToolCategory, ToolEntry, ToolResult, ToolAvailability};
+use crate::tools::{Tool, ToolAvailability, ToolCategory, ToolEntry, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
@@ -82,10 +82,14 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
             message: format!("failed to build HTTP client: {}", e),
         })?;
 
-        let response = client.get(&url).send().await.map_err(|e| BytodeError::Tool {
-            tool: "search_web".into(),
-            message: format!("request failed: {}", e),
-        })?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| BytodeError::Tool {
+                tool: "search_web".into(),
+                message: format!("request failed: {}", e),
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -231,7 +235,13 @@ fn strip_html(s: &str) -> String {
             _ => {}
         }
     }
-    let trimmed = result.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#x27;", "'").replace("&nbsp;", " ");
+    let trimmed = result
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ");
     let collapsed: String = trimmed
         .lines()
         .map(|l| l.trim())
@@ -244,7 +254,10 @@ fn strip_html(s: &str) -> String {
 impl SearchWebTool {
     pub fn entry(timeout_secs: u64, proxy: Option<String>) -> ToolEntry {
         ToolEntry {
-            tool: Box::new(SearchWebTool { timeout_secs, proxy }),
+            tool: Box::new(SearchWebTool {
+                timeout_secs,
+                proxy,
+            }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         }
