@@ -1,0 +1,12 @@
+[package]
+name = "bytode-llm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-openai.workspace = true
+bytode-common = { path = "../bytode-common" }
+futures.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "bytode-lsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytode-common = { path = "../bytode-common" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

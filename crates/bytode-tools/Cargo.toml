@@ -1,0 +1,14 @@
+[package]
+name = "bytode-tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytode-common = { path = "../bytode-common" }
+bytode-lsp = { path = "../bytode-lsp" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

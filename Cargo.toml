@@ -1,39 +1,33 @@
-[package]
-name = "bytode"
+[workspace]
+members = [
+    "crates/bytode-common",
+    "crates/bytode-llm",
+    "crates/bytode-lsp",
+    "crates/bytode-tools",
+    "crates/bytode-agent",
+    "crates/bytode-cli",
+]
+default-members = ["crates/bytode-cli"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-# LLM
+[workspace.dependencies]
 async-openai = "0.27"
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
-futures = "0.3"
-
-# TUI
-ratatui = "0.28"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
-
-# Data
+dirs = "5"
+futures = "0.3"
+git2 = "0.19"
+ratatui = "0.28"
+reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
-
-# Git
-git2 = "0.19"
-
-# CLI
-clap = { version = "4", features = ["derive"] }
-
-# Error handling
 thiserror = "2"
-
-# Paths
-dirs = "5"
-
-# Logging
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Async trait
-async-trait = "0.1"
