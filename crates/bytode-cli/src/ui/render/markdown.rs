@@ -41,7 +41,9 @@ pub fn render_md(content: &str) -> Vec<Line<'_>> {
                 out.push(Line::from(vec![
                     Span::styled(
                         "   \u{27f3} ",
-                        Style::default().fg(ORANGE).add_modifier(Modifier::SLOW_BLINK),
+                        Style::default()
+                            .fg(ORANGE)
+                            .add_modifier(Modifier::SLOW_BLINK),
                     ),
                     Span::styled(name, Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
                     Span::styled(
@@ -76,11 +78,16 @@ pub fn render_md(content: &str) -> Vec<Line<'_>> {
         if let Some(text) = trimmed.strip_prefix("> ") {
             out.push(Line::from(Span::styled(
                 format!("   | {text}"),
-                Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(TXT_SUBTLE)
+                    .add_modifier(Modifier::ITALIC),
             )));
             continue;
         }
-        if let Some(text) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+        if let Some(text) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
             let spans = parse_inline_md(text, false);
             let mut line_spans = vec![Span::styled("   \u{2022} ", Style::default().fg(BLUE))];
             line_spans.extend(spans);
@@ -92,8 +99,10 @@ pub fn render_md(content: &str) -> Vec<Line<'_>> {
                 let num = &trimmed[..idx];
                 let text = &trimmed[idx + 2..];
                 let spans = parse_inline_md(text, false);
-                let mut line_spans =
-                    vec![Span::styled(format!("   {num}. "), Style::default().fg(BLUE))];
+                let mut line_spans = vec![Span::styled(
+                    format!("   {num}. "),
+                    Style::default().fg(BLUE),
+                )];
                 line_spans.extend(spans);
                 out.push(Line::from(line_spans));
                 continue;
@@ -147,12 +156,7 @@ fn parse_inline_md(line: &str, add_prefix: bool) -> Vec<Span<'_>> {
         }
     }
 
-    fn push_styled(
-        spans: &mut Vec<Span<'_>>,
-        text: String,
-        style: Style,
-        need_prefix: &mut bool,
-    ) {
+    fn push_styled(spans: &mut Vec<Span<'_>>, text: String, style: Style, need_prefix: &mut bool) {
         let text = if *need_prefix {
             *need_prefix = false;
             format!("   {text}")
@@ -479,21 +483,33 @@ mod tests {
     fn plain_text() {
         let lines = render_md("hello world");
         assert_eq!(lines.len(), 1);
-        let text: String = lines[0].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert_eq!(text, "   hello world");
     }
 
     #[test]
     fn spinner_line() {
         let lines = render_md("  \u{27f3} read_file(/tmp/x)");
-        let text: String = lines[0].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(text.contains("read_file"), "{text:?}");
     }
 
     #[test]
     fn inline_code() {
         let lines = render_md("use `Arc` here");
-        let text: String = lines[0].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(text.contains("Arc"), "{text:?}");
     }
 
@@ -506,7 +522,11 @@ mod tests {
     #[test]
     fn diff_line() {
         let lines = render_md("   + let x = 42;");
-        let text: String = lines[0].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(text.contains('+'), "{text:?}");
         assert!(text.contains("let"), "{text:?}");
     }

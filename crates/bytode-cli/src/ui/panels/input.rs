@@ -1,7 +1,9 @@
 use crate::ui::events::{
     DispatchResult, Effect, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec,
 };
-use crate::ui::panels::{panel_block, BG, BLUE, ORANGE, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext};
+use crate::ui::panels::{
+    BG, BLUE, ORANGE, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, panel_block,
+};
 use crate::ui::render;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -17,7 +19,12 @@ pub struct InputPanel {
 
 impl InputPanel {
     pub fn new() -> Self {
-        Self { input: String::new(), cursor: 0, pending: None, notice: None }
+        Self {
+            input: String::new(),
+            cursor: 0,
+            pending: None,
+            notice: None,
+        }
     }
 
     pub fn id(&self) -> PanelId {
@@ -104,13 +111,11 @@ impl InputPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let input_height = self.visible_input_lines().min(inner.height.saturating_sub(1)).max(1);
-        let input_area = Rect::new(
-            inner.x,
-            inner.y,
-            inner.width,
-            input_height,
-        );
+        let input_height = self
+            .visible_input_lines()
+            .min(inner.height.saturating_sub(1))
+            .max(1);
+        let input_area = Rect::new(inner.x, inner.y, inner.width, input_height);
         let footer_area = Rect::new(
             inner.x,
             inner.y.saturating_add(input_height),
@@ -119,7 +124,10 @@ impl InputPanel {
         );
 
         render::render_input(frame, input_area, &self.input, self.cursor);
-        frame.render_widget(Paragraph::new(self.footer_line(ctx)).style(Style::default().bg(BG)), footer_area);
+        frame.render_widget(
+            Paragraph::new(self.footer_line(ctx)).style(Style::default().bg(BG)),
+            footer_area,
+        );
     }
 
     pub fn handle_mouse(
@@ -173,7 +181,11 @@ impl InputPanel {
 
     fn footer_line(&self, ctx: &RenderContext<'_>) -> Line<'static> {
         let status = &ctx.runtime.status;
-        let mode = if status.mode.is_empty() { "build" } else { status.mode.as_str() };
+        let mode = if status.mode.is_empty() {
+            "build"
+        } else {
+            status.mode.as_str()
+        };
         let activity = if status.task.is_empty() {
             "idle".to_string()
         } else {
@@ -186,11 +198,17 @@ impl InputPanel {
 
         Line::from(vec![
             Span::styled("▎ ", Style::default().fg(BLUE)),
-            Span::styled(format!("{mode}"), Style::default().fg(TXT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{mode}"),
+                Style::default().fg(TXT).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  ", Style::default().bg(BG)),
             Span::styled(activity, Style::default().fg(ORANGE)),
             Span::styled("  ", Style::default().bg(BG)),
-            Span::styled(notice, Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::DIM)),
+            Span::styled(
+                notice,
+                Style::default().fg(TXT_SUBTLE).add_modifier(Modifier::DIM),
+            ),
         ])
     }
 

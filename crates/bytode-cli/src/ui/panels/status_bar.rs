@@ -1,6 +1,4 @@
-use crate::ui::events::{
-    DispatchResult, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec,
-};
+use crate::ui::events::{DispatchResult, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec};
 use crate::ui::panels::{PanelContext, RenderContext, UiContext};
 use crate::ui::statusbar;
 use ratatui::prelude::*;
@@ -25,7 +23,12 @@ impl StatusBarPanel {
     }
 
     pub fn window_spec(&self, _ctx: &UiContext<'_>) -> WindowSpec {
-        WindowSpec { id: self.id(), z_index: 0, slot: WindowSlot::Bottom, size: 1 }
+        WindowSpec {
+            id: self.id(),
+            z_index: 0,
+            slot: WindowSlot::Bottom,
+            size: 1,
+        }
     }
 
     pub fn handle_key(&mut self, _key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {

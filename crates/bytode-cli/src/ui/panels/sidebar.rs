@@ -1,5 +1,8 @@
 use crate::ui::events::{DispatchResult, KeyAction, MouseAction, PanelId, WindowSlot, WindowSpec};
-use crate::ui::panels::{panel_block, BLUE, CYAN, GREEN, ORANGE, PanelContext, RED, RenderContext, TXT, TXT_SUBTLE, UiContext};
+use crate::ui::panels::{
+    BLUE, CYAN, GREEN, ORANGE, PanelContext, RED, RenderContext, TXT, TXT_SUBTLE, UiContext,
+    panel_block,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Wrap};
 
@@ -25,7 +28,12 @@ impl SidebarPanel {
     }
 
     pub fn window_spec(&self, _ctx: &UiContext<'_>) -> WindowSpec {
-        WindowSpec { id: self.id(), z_index: 0, slot: WindowSlot::Right, size: 24 }
+        WindowSpec {
+            id: self.id(),
+            z_index: 0,
+            slot: WindowSlot::Right,
+            size: 24,
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {
@@ -59,7 +67,10 @@ impl SidebarPanel {
         frame.render_widget(block, area);
 
         let mut lines = vec![
-            Line::from(Span::styled(" Tools", Style::default().fg(BLUE).add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                " Tools",
+                Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
+            )),
             Line::from(""),
         ];
 
@@ -72,7 +83,11 @@ impl SidebarPanel {
                 "get_diagnostics" => RED,
                 _ => Color::Rgb(156, 160, 176),
             };
-            let prefix = if ctx.focused == Some(self.id()) && index == self.selected { "›" } else { " " };
+            let prefix = if ctx.focused == Some(self.id()) && index == self.selected {
+                "›"
+            } else {
+                " "
+            };
             lines.push(Line::from(vec![
                 Span::styled(format!("{prefix} "), Style::default().fg(BLUE)),
                 Span::styled(name.clone(), Style::default().fg(color)),
@@ -90,10 +105,16 @@ impl SidebarPanel {
         ]));
         lines.push(Line::from(vec![
             Span::styled(" D: ", Style::default().fg(Color::Rgb(140, 143, 161))),
-            Span::styled(&ctx.runtime.detection_source, Style::default().fg(TXT_SUBTLE)),
+            Span::styled(
+                &ctx.runtime.detection_source,
+                Style::default().fg(TXT_SUBTLE),
+            ),
         ]));
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(" tab cycle focus", Style::default().fg(TXT_SUBTLE))));
+        lines.push(Line::from(Span::styled(
+            " tab cycle focus",
+            Style::default().fg(TXT_SUBTLE),
+        )));
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(paragraph, inner);
@@ -166,7 +187,11 @@ mod tests {
             primary_language: "rust".into(),
             detection_source: "auto".into(),
         };
-        let ctx = UiContext { exec_state: &ExecState::Idle, runtime: &runtime, sidebar_visible: true };
+        let ctx = UiContext {
+            exec_state: &ExecState::Idle,
+            runtime: &runtime,
+            sidebar_visible: true,
+        };
 
         panel.normalize(&ctx);
         assert_eq!(panel.selected, 1);

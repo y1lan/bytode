@@ -1,8 +1,7 @@
 use crate::agent::{Agent, AgentMode};
 use crate::project::ProjectProfile;
 use crate::ui::events::{
-    Effect, ExecState, KeyAction, MouseAction, OverlayId, OverlayState, PanelId, TurnId,
-    WindowSlot,
+    Effect, ExecState, KeyAction, MouseAction, OverlayId, OverlayState, PanelId, TurnId, WindowSlot,
 };
 use crate::ui::overlays::OverlayStack;
 use crate::ui::panels::{
@@ -279,8 +278,12 @@ impl AppShell {
                 });
             }
             Effect::RejectTool(request) => self.show_notice(format!("rejected: {request}")),
-            Effect::SaveSession | Effect::RestoreTerminal | Effect::Exit | Effect::StartTurn { .. }
-            | Effect::CancelTurn(_) | Effect::HandleSlashCommand(_) => {}
+            Effect::SaveSession
+            | Effect::RestoreTerminal
+            | Effect::Exit
+            | Effect::StartTurn { .. }
+            | Effect::CancelTurn(_)
+            | Effect::HandleSlashCommand(_) => {}
         }
     }
 
@@ -464,7 +467,10 @@ fn parse_slash_command(command: &str) -> SlashCommand {
         return SlashCommand::Model(model);
     }
     if command.starts_with("/plan") {
-        let toggle = command.split_whitespace().nth(1).map(|item| item.to_lowercase());
+        let toggle = command
+            .split_whitespace()
+            .nth(1)
+            .map(|item| item.to_lowercase());
         return SlashCommand::Plan(toggle);
     }
     SlashCommand::Unknown
@@ -525,7 +531,10 @@ mod tests {
 
         let effects = shell.dispatch_key(KeyAction::CtrlC);
         assert_eq!(effects, vec![Effect::CancelTurn(7)]);
-        assert!(matches!(shell.exec_state, ExecState::Cancelling { turn_id: 7 }));
+        assert!(matches!(
+            shell.exec_state,
+            ExecState::Cancelling { turn_id: 7 }
+        ));
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use crate::ui::events::{DispatchResult, Effect, KeyAction, MouseAction, MouseButton, PanelId, WindowSlot};
+use crate::ui::events::{
+    DispatchResult, Effect, KeyAction, MouseAction, MouseButton, PanelId, WindowSlot,
+};
 use crate::ui::panels::{PanelContext, PanelNode, RenderContext, UiContext};
 use ratatui::prelude::*;
 
@@ -119,7 +121,12 @@ impl WindowManager {
         }
     }
 
-    pub fn dispatch_mouse(&mut self, mouse: MouseAction, area: Rect, ctx: &UiContext<'_>) -> Vec<Effect> {
+    pub fn dispatch_mouse(
+        &mut self,
+        mouse: MouseAction,
+        area: Rect,
+        ctx: &UiContext<'_>,
+    ) -> Vec<Effect> {
         self.normalize_focus(ctx);
 
         let Some(placement) = self.hit_test(area, ctx, mouse.column(), mouse.row()) else {
@@ -156,11 +163,14 @@ impl WindowManager {
     }
 
     pub fn render(&self, frame: &mut Frame, ctx: &RenderContext<'_>) {
-        let placements = self.layout(frame.area(), &UiContext {
-            exec_state: ctx.exec_state,
-            runtime: ctx.runtime,
-            sidebar_visible: ctx.sidebar_visible,
-        });
+        let placements = self.layout(
+            frame.area(),
+            &UiContext {
+                exec_state: ctx.exec_state,
+                runtime: ctx.runtime,
+                sidebar_visible: ctx.sidebar_visible,
+            },
+        );
 
         for placement in placements {
             if let Some(panel) = self.panels.iter().find(|panel| panel.id() == placement.id) {
@@ -247,7 +257,13 @@ impl WindowManager {
         placements
     }
 
-    fn hit_test(&self, area: Rect, ctx: &UiContext<'_>, column: u16, row: u16) -> Option<WindowPlacement> {
+    fn hit_test(
+        &self,
+        area: Rect,
+        ctx: &UiContext<'_>,
+        column: u16,
+        row: u16,
+    ) -> Option<WindowPlacement> {
         self.layout(area, ctx)
             .into_iter()
             .rev()
@@ -329,7 +345,9 @@ impl MouseLocation for MouseAction {
 mod tests {
     use super::*;
     use crate::ui::events::{ExecState, MouseAction, MouseButton, PanelId};
-    use crate::ui::panels::{ContentPanel, InputPanel, RuntimeSnapshot, SidebarPanel, StatusBarPanel};
+    use crate::ui::panels::{
+        ContentPanel, InputPanel, RuntimeSnapshot, SidebarPanel, StatusBarPanel,
+    };
     use crate::ui::statusbar::StatusBarState;
 
     fn runtime() -> RuntimeSnapshot {

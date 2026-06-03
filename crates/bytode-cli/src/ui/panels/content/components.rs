@@ -44,13 +44,21 @@ impl TranscriptComponent<UserMessage> for UserCard {
                 Span::styled("▎", Style::default().fg(BLUE).bg(CARD_BG)),
                 Span::styled(
                     " you",
-                    Style::default().fg(BLUE).bg(CARD_BG).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(BLUE)
+                        .bg(CARD_BG)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ],
             width,
         ));
 
-        push_markdown_lines(out, render::render_md(&value.body), width, card_markdown_line);
+        push_markdown_lines(
+            out,
+            render::render_md(&value.body),
+            width,
+            card_markdown_line,
+        );
 
         if let Some(meta) = &value.meta {
             out.push(card_line(
@@ -72,7 +80,12 @@ impl TranscriptComponent<UserMessage> for UserCard {
 
 impl TranscriptComponent<TextPart> for AssistantTextBlock {
     fn render(&self, value: &TextPart, width: usize, out: &mut Vec<Line<'static>>) {
-        push_markdown_lines(out, render::render_md(&value.content), width, text_markdown_line);
+        push_markdown_lines(
+            out,
+            render::render_md(&value.content),
+            width,
+            text_markdown_line,
+        );
     }
 }
 
@@ -163,7 +176,11 @@ impl TranscriptComponent<String> for ErrorBlock {
     }
 }
 
-pub(crate) fn render_history_entry(entry: &HistoryEntry, width: usize, out: &mut Vec<Line<'static>>) {
+pub(crate) fn render_history_entry(
+    entry: &HistoryEntry,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
     match entry {
         HistoryEntry::User(message) => UserCard.render(message, width, out),
         HistoryEntry::Assistant(message) => render_assistant_message(message, width, out),
@@ -186,7 +203,11 @@ pub(crate) fn render_history_entry_with_hits(
     }
 }
 
-fn render_assistant_message(message: &AssistantMessage, width: usize, out: &mut Vec<Line<'static>>) {
+fn render_assistant_message(
+    message: &AssistantMessage,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
     let mut first = true;
     for part in &message.parts {
         if !first {
@@ -277,11 +298,12 @@ fn padded_line(mut spans: Vec<Span<'static>>, width: usize, bg: Color) -> Line<'
 fn card_markdown_line(line: Line<'_>, width: usize) -> Line<'static> {
     let mut spans = vec![Span::styled("▎", Style::default().fg(BLUE).bg(CARD_BG))];
     spans.push(Span::styled(" ", Style::default().bg(CARD_BG)));
-    spans.extend(
-        line.spans
-            .iter()
-            .map(|span| Span::styled(span.content.to_string(), retint_style(span.style, CARD_BG, TXT))),
-    );
+    spans.extend(line.spans.iter().map(|span| {
+        Span::styled(
+            span.content.to_string(),
+            retint_style(span.style, CARD_BG, TXT),
+        )
+    }));
     card_line(spans, width)
 }
 
@@ -341,7 +363,10 @@ fn tool_state_visual(state: ToolState) -> (&'static str, Style, Color) {
 }
 
 fn collapse_lines(body: &str, collapsed: bool) -> Vec<String> {
-    let lines = body.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+    let lines = body
+        .lines()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
     if !collapsed || lines.len() <= 6 {
         return lines;
     }

@@ -1,9 +1,9 @@
 use crate::agent::Agent;
 use crate::project::ProjectProfile;
+use crate::ui::Terminal;
 use crate::ui::app_shell::AppShell;
 use crate::ui::events::{Effect, KeyAction, MouseAction, TurnId};
 use crate::ui::panels::HistoryEntry;
-use crate::ui::Terminal;
 use crossterm::event::Event;
 use futures::FutureExt;
 use std::sync::atomic::Ordering;

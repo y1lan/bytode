@@ -110,7 +110,11 @@ impl ContextBuilder {
 
 fn build_core_prompt(profile: &ProjectProfile, registry: &ToolRegistry) -> String {
     let project_snapshot = profile.snapshot();
-    let tool_list: Vec<String> = registry.active_names().iter().map(|n| format!("- {}", n)).collect();
+    let tool_list: Vec<String> = registry
+        .active_names()
+        .iter()
+        .map(|n| format!("- {}", n))
+        .collect();
 
     format!(
         r#"You are bytode, a terminal coding agent specialized in Rust development.
@@ -174,10 +178,7 @@ fn format_tool_result(result: &ToolResult) -> String {
             line_count,
             ..
         } => {
-            format!(
-                "File: {} ({} lines shown)\n{}",
-                path, line_count, content
-            )
+            format!("File: {} ({} lines shown)\n{}", path, line_count, content)
         }
         ToolResult::Diagnostics {
             total,

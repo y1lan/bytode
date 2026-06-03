@@ -80,8 +80,7 @@ impl MemoryLayer {
                 .filter(|t| {
                     // Keep turn if it has at least one successful tool call
                     // OR it has assistant text (meaningful completion)
-                    t.assistant_text.is_some()
-                        || t.tool_calls.iter().any(|tc| !tc.is_error())
+                    t.assistant_text.is_some() || t.tool_calls.iter().any(|tc| !tc.is_error())
                 })
                 .cloned()
                 .collect(),
@@ -148,10 +147,7 @@ fn summarize_turns(turns: &[Turn]) -> String {
                 }
                 ToolResult::Diagnostics { list, .. } => {
                     for d in list.iter().filter(|d| d.severity == "error") {
-                        errors_fixed.push(format!(
-                            "{} [{}:{}]",
-                            d.message, d.file, d.line
-                        ));
+                        errors_fixed.push(format!("{} [{}:{}]", d.message, d.file, d.line));
                     }
                 }
                 _ => {}

@@ -1,6 +1,6 @@
 use crossterm::event::{
-    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton as CrosstermMouseButton,
-    MouseEvent, MouseEventKind,
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton as CrosstermMouseButton, MouseEvent,
+    MouseEventKind,
 };
 
 pub type TurnId = u64;
@@ -148,7 +148,9 @@ impl KeyAction {
             KeyCode::Char('t') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::CtrlT)
             }
-            KeyCode::Char(ch) if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char(ch)
+                if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT =>
+            {
                 Some(KeyAction::Char(ch))
             }
             KeyCode::Enter if event.modifiers.contains(KeyModifiers::ALT) => {
@@ -208,11 +210,24 @@ fn map_mouse_button(button: CrosstermMouseButton) -> Option<MouseButton> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecState {
     Idle,
-    Streaming { turn_id: TurnId },
-    AwaitingApproval { turn_id: TurnId, request: String },
-    ToolRunning { turn_id: TurnId, tool_name: String },
-    Cancelling { turn_id: TurnId },
-    Blocked { turn_id: Option<TurnId>, reason: String },
+    Streaming {
+        turn_id: TurnId,
+    },
+    AwaitingApproval {
+        turn_id: TurnId,
+        request: String,
+    },
+    ToolRunning {
+        turn_id: TurnId,
+        tool_name: String,
+    },
+    Cancelling {
+        turn_id: TurnId,
+    },
+    Blocked {
+        turn_id: Option<TurnId>,
+        reason: String,
+    },
 }
 
 impl ExecState {

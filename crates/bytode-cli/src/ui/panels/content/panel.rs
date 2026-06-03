@@ -1,16 +1,13 @@
 use super::components::{
-    blank_line, render_history_entry, render_history_entry_with_hits, surface_line,
-    ContentHitRegion, ContentHitTarget,
+    ContentHitRegion, ContentHitTarget, blank_line, render_history_entry,
+    render_history_entry_with_hits, surface_line,
 };
 use super::model::{AssistantMessage, AssistantPart, HistoryEntry, ScrollMode, UserMessage};
 use super::parser::{parse_assistant_message, stream_tool_state};
 use crate::ui::events::{
-    DispatchResult, ExecState, KeyAction, MouseAction, MouseButton, PanelId, WindowSlot,
-    WindowSpec,
+    DispatchResult, ExecState, KeyAction, MouseAction, MouseButton, PanelId, WindowSlot, WindowSpec,
 };
-use crate::ui::panels::{
-    panel_block, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, BG,
-};
+use crate::ui::panels::{BG, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, panel_block};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::cell::{Cell, RefCell};
@@ -51,7 +48,12 @@ impl ContentPanel {
     }
 
     pub fn window_spec(&self, _ctx: &UiContext<'_>) -> WindowSpec {
-        WindowSpec { id: self.id(), z_index: 0, slot: WindowSlot::Content, size: 0 }
+        WindowSpec {
+            id: self.id(),
+            z_index: 0,
+            slot: WindowSlot::Content,
+            size: 0,
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyAction, _ctx: &PanelContext<'_>) -> DispatchResult {
@@ -132,7 +134,10 @@ impl ContentPanel {
 
         let paragraph = Paragraph::new(lines)
             .style(Style::default().fg(TXT).bg(BG))
-            .scroll((self.scroll_offset(self.last_total_lines.get(), visible) as u16, 0));
+            .scroll((
+                self.scroll_offset(self.last_total_lines.get(), visible) as u16,
+                0,
+            ));
         frame.render_widget(paragraph, inner);
     }
 
@@ -166,8 +171,10 @@ impl ContentPanel {
     }
 
     pub fn push_user(&mut self, text: String) {
-        self.entries
-            .push(HistoryEntry::User(UserMessage { body: text, meta: None }));
+        self.entries.push(HistoryEntry::User(UserMessage {
+            body: text,
+            meta: None,
+        }));
         self.scroll = ScrollMode::Auto;
     }
 
@@ -204,10 +211,11 @@ impl ContentPanel {
             return;
         }
 
-        self.entries.push(HistoryEntry::Assistant(parse_assistant_message(
-            &final_text,
-            stream_tool_state(None),
-        )));
+        self.entries
+            .push(HistoryEntry::Assistant(parse_assistant_message(
+                &final_text,
+                stream_tool_state(None),
+            )));
     }
 
     fn collect_lines(
@@ -270,7 +278,9 @@ impl ContentPanel {
 
         self.scroll = match self.scroll {
             ScrollMode::Auto => ScrollMode::Manual(step.min(max_scroll)),
-            ScrollMode::Manual(current) => ScrollMode::Manual(current.saturating_add(step).min(max_scroll)),
+            ScrollMode::Manual(current) => {
+                ScrollMode::Manual(current.saturating_add(step).min(max_scroll))
+            }
         };
         DispatchResult::Consumed(Vec::new())
     }
@@ -330,7 +340,9 @@ impl ContentPanel {
         let Some(AssistantPart::Tool(part)) = message.parts.get_mut(part_index) else {
             return false;
         };
-        if part.body.is_none() || !matches!(part.presentation, super::model::ToolPresentation::Block) {
+        if part.body.is_none()
+            || !matches!(part.presentation, super::model::ToolPresentation::Block)
+        {
             return false;
         }
         part.collapsed = !part.collapsed;
@@ -359,7 +371,8 @@ impl ContentPanel {
         self.last_total_lines.set(all.0.len());
         self.last_visible_lines.set(visible);
         let start = self.scroll_offset(all.0.len(), visible);
-        all.0.into_iter()
+        all.0
+            .into_iter()
             .skip(start)
             .take(visible)
             .map(|line| line.to_string())
@@ -377,7 +390,7 @@ fn point_in_rect(area: Rect, column: u16, row: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::panels::AssistantPart;
+    use crate::ui::panels::content::model::AssistantPart;
 
     fn idle_panel_ctx() -> PanelContext<'static> {
         static EXEC_STATE: ExecState = ExecState::Idle;
@@ -486,7 +499,11 @@ mod tests {
 
         let lines = panel.rendered_text_for_test(6, 120, &exec_state);
         assert!(lines.iter().any(|line| line.contains("read_file")));
-        assert!(lines.iter().any(|line| line.contains("1 | use crate::error")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("1 | use crate::error"))
+        );
     }
 
     #[test]

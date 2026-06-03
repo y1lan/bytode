@@ -5,16 +5,16 @@ use crate::error::Result;
 use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
 use crate::project::ProjectProfile;
 use crate::tools::{ToolRegistry, ToolResult};
-use crate::ui::panels::{
-    AssistantMessage, AssistantPart, HistoryEntry, TextPart, ToolPart, ToolPresentation,
-    ToolState, UserMessage,
+use crate::transcript::{
+    AssistantMessage, AssistantPart, HistoryEntry, TextPart, ToolPart, ToolPresentation, ToolState,
+    UserMessage,
 };
 use context::ContextBuilder;
 use memory::{MemoryLayer, SessionData, Turn};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Agent {
     llm: DeepSeekClient,
@@ -97,10 +97,7 @@ impl Agent {
             let messages = self.context.build(&turn);
             let tools = self.registry.to_openai_format();
 
-            let response = self
-                .llm
-                .chat_stream(messages, tools, &mut on_text)
-                .await?;
+            let response = self.llm.chat_stream(messages, tools, &mut on_text).await?;
 
             match response {
                 LlmOutput::Text(text) => {
@@ -168,21 +165,21 @@ impl Agent {
     }
 
     async fn execute_tool(&self, call: &ToolCall) -> Result<ToolResult> {
-        let tool = self.registry.find(&call.name).ok_or_else(|| {
-            crate::error::BytodeError::Tool {
-                tool: call.name.clone(),
-                message: "unknown tool".into(),
-            }
-        })?;
+        let tool =
+            self.registry
+                .find(&call.name)
+                .ok_or_else(|| crate::error::BytodeError::Tool {
+                    tool: call.name.clone(),
+                    message: "unknown tool".into(),
+                })?;
 
         let timeout = tokio::time::Duration::from_millis(tool.timeout_ms());
-        let result =
-            tokio::time::timeout(timeout, tool.execute(call.arguments.clone()))
-                .await
-                .map_err(|_| crate::error::BytodeError::Tool {
-                    tool: call.name.clone(),
-                    message: "timeout".into(),
-                })??;
+        let result = tokio::time::timeout(timeout, tool.execute(call.arguments.clone()))
+            .await
+            .map_err(|_| crate::error::BytodeError::Tool {
+                tool: call.name.clone(),
+                message: "timeout".into(),
+            })??;
 
         Ok(result)
     }
@@ -245,24 +242,23 @@ impl Agent {
             self.is_exact,
         );
 
-        self.context.rebuild_core_prompt(&self.profile, &self.registry);
+        self.context
+            .rebuild_core_prompt(&self.profile, &self.registry);
     }
 
     pub fn save_session(&self, path: &Path, project_path: &str) -> Result<()> {
         let mut data = self.context.memory.session_data();
         data.project_path = Some(project_path.to_string());
-        let json = serde_json::to_string_pretty(&data).map_err(|e| {
-            crate::error::BytodeError::Json(e)
-        })?;
+        let json =
+            serde_json::to_string_pretty(&data).map_err(|e| crate::error::BytodeError::Json(e))?;
         std::fs::write(path, json)?;
         Ok(())
     }
 
     pub fn load_session(&mut self, path: &Path) -> Result<()> {
         let content = std::fs::read_to_string(path)?;
-        let data: SessionData = serde_json::from_str(&content).map_err(|e| {
-            crate::error::BytodeError::Json(e)
-        })?;
+        let data: SessionData =
+            serde_json::from_str(&content).map_err(|e| crate::error::BytodeError::Json(e))?;
         self.context.memory = MemoryLayer::from_session(data, 10);
         Ok(())
     }
@@ -311,13 +307,17 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
     match tool_name {
         "read_file" => {
             let path = args["path"].as_str().unwrap_or("?");
-            let offset = args["offset"].as_u64().map(|o| format!(", offset={o}")).unwrap_or_default();
-            let limit = args["limit"].as_u64().map(|l| format!(", limit={l}")).unwrap_or_default();
+            let offset = args["offset"]
+                .as_u64()
+                .map(|o| format!(", offset={o}"))
+                .unwrap_or_default();
+            let limit = args["limit"]
+                .as_u64()
+                .map(|l| format!(", limit={l}"))
+                .unwrap_or_default();
             format!("{path}{offset}{limit}")
         }
-        "write_file" => {
-            args["path"].as_str().unwrap_or("?").to_string()
-        }
+        "write_file" => args["path"].as_str().unwrap_or("?").to_string(),
         "search_code" => {
             let pat = args["pattern"].as_str().unwrap_or("?");
             if let Some(p) = args["path"].as_str() {
@@ -328,15 +328,27 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         }
         "get_diagnostics" => {
             let mut parts = Vec::new();
-            if let Some(p) = args["path"].as_str() { parts.push(format!("path={p}")); }
-            if let Some(f) = args["filter"].as_str() { parts.push(format!("filter={f}")); }
-            if parts.is_empty() { "?".into() } else { parts.join(", ") }
+            if let Some(p) = args["path"].as_str() {
+                parts.push(format!("path={p}"));
+            }
+            if let Some(f) = args["filter"].as_str() {
+                parts.push(format!("filter={f}"));
+            }
+            if parts.is_empty() {
+                "?".into()
+            } else {
+                parts.join(", ")
+            }
         }
         "cargo" => {
             let cmd = args["cmd"].as_str().unwrap_or("?");
             if let Some(extra) = args["args"].as_array() {
                 let ex: Vec<&str> = extra.iter().filter_map(|v| v.as_str()).collect();
-                if ex.is_empty() { cmd.to_string() } else { format!("{cmd} {}", ex.join(" ")) }
+                if ex.is_empty() {
+                    cmd.to_string()
+                } else {
+                    format!("{cmd} {}", ex.join(" "))
+                }
             } else {
                 cmd.to_string()
             }
@@ -344,7 +356,11 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         "cargo_check" => {
             if let Some(e) = args["extra_args"].as_array() {
                 let ex: Vec<&str> = e.iter().filter_map(|v| v.as_str()).collect();
-                if ex.is_empty() { "?".into() } else { ex.join(" ") }
+                if ex.is_empty() {
+                    "?".into()
+                } else {
+                    ex.join(" ")
+                }
             } else {
                 "?".into()
             }
@@ -352,8 +368,12 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         "git_status" => args["path"].as_str().unwrap_or("").to_string(),
         "git_diff" => {
             let mut parts = Vec::new();
-            if args["staged"].as_bool().unwrap_or(false) { parts.push("staged"); }
-            if let Some(p) = args["path"].as_str() { parts.push(p); }
+            if args["staged"].as_bool().unwrap_or(false) {
+                parts.push("staged");
+            }
+            if let Some(p) = args["path"].as_str() {
+                parts.push(p);
+            }
             parts.join(", ")
         }
         "git_log" => {
@@ -366,27 +386,49 @@ fn format_args(tool_name: &str, args: &serde_json::Value) -> String {
         }
         "web_search" => {
             let q = args["query"].as_str().unwrap_or("?");
-            if q.len() > 60 { format!("\"{}...\"", &q[..57]) } else { format!("\"{q}\"") }
+            if q.len() > 60 {
+                format!("\"{}...\"", &q[..57])
+            } else {
+                format!("\"{q}\"")
+            }
         }
         "git_commit" => {
             let msg = args["message"].as_str().unwrap_or("?");
-            if msg.len() > 50 { format!("\"{}...\"", &msg[..47]) } else { format!("\"{msg}\"") }
+            if msg.len() > 50 {
+                format!("\"{}...\"", &msg[..47])
+            } else {
+                format!("\"{msg}\"")
+            }
         }
         "git_push" => {
             let mut parts = Vec::new();
-            if let Some(r) = args["remote"].as_str().filter(|r| *r != "origin") { parts.push(format!("remote={r}")); }
-            if let Some(b) = args["branch"].as_str() { parts.push(format!("branch={b}")); }
-            if args["force"].as_bool().unwrap_or(false) { parts.push("force".into()); }
-            if parts.is_empty() { "origin".into() } else { parts.join(", ") }
+            if let Some(r) = args["remote"].as_str().filter(|r| *r != "origin") {
+                parts.push(format!("remote={r}"));
+            }
+            if let Some(b) = args["branch"].as_str() {
+                parts.push(format!("branch={b}"));
+            }
+            if args["force"].as_bool().unwrap_or(false) {
+                parts.push("force".into());
+            }
+            if parts.is_empty() {
+                "origin".into()
+            } else {
+                parts.join(", ")
+            }
         }
         _ => "?".into(),
     }
 }
 
 fn history_tool_part(record: &memory::ToolCallRecord) -> ToolPart {
-    let summary = format!("{} {}", record.name, format_args(&record.name, &record.arguments))
-        .trim()
-        .to_string();
+    let summary = format!(
+        "{} {}",
+        record.name,
+        format_args(&record.name, &record.arguments)
+    )
+    .trim()
+    .to_string();
     let state = if record.is_error() {
         ToolState::Failed
     } else {
@@ -411,10 +453,12 @@ fn history_tool_part(record: &memory::ToolCallRecord) -> ToolPart {
 
 fn history_tool_body(result: &ToolResult) -> Option<String> {
     match result {
-        ToolResult::FileContent { path, content, line_count, .. } => Some(format!(
-            "{}\n{} lines\n{}",
-            path, line_count, content
-        )),
+        ToolResult::FileContent {
+            path,
+            content,
+            line_count,
+            ..
+        } => Some(format!("{}\n{} lines\n{}", path, line_count, content)),
         ToolResult::Diagnostics {
             total,
             errors,
@@ -435,10 +479,7 @@ fn history_tool_body(result: &ToolResult) -> Option<String> {
             Some(lines.join("\n"))
         }
         ToolResult::Json {
-            tool,
-            count,
-            data,
-            ..
+            tool, count, data, ..
         } => {
             let preview = data
                 .iter()
@@ -455,15 +496,23 @@ fn history_tool_body(result: &ToolResult) -> Option<String> {
             truncated,
         } => {
             let mut lines = vec![format!("pattern={pattern} count={count}")];
-            lines.extend(items.iter().take(8).map(|item| {
-                format!("{}:{} {}", item.file, item.line, item.text)
-            }));
+            lines.extend(
+                items
+                    .iter()
+                    .take(8)
+                    .map(|item| format!("{}:{} {}", item.file, item.line, item.text)),
+            );
             if *truncated {
                 lines.push("...".into());
             }
             Some(lines.join("\n"))
         }
-        ToolResult::WriteConfirmation { path, bytes_written, lines, diff } => Some(format!(
+        ToolResult::WriteConfirmation {
+            path,
+            bytes_written,
+            lines,
+            diff,
+        } => Some(format!(
             "{}\n{} bytes, {} lines\n{}",
             path, bytes_written, lines, diff
         )),
@@ -472,7 +521,10 @@ fn history_tool_body(result: &ToolResult) -> Option<String> {
 }
 
 fn history_tool_presentation(name: &str, body: Option<&str>) -> ToolPresentation {
-    if matches!(name, "write_file" | "cargo" | "cargo_check" | "get_diagnostics") {
+    if matches!(
+        name,
+        "write_file" | "cargo" | "cargo_check" | "get_diagnostics"
+    ) {
         return ToolPresentation::Block;
     }
 
@@ -482,7 +534,9 @@ fn history_tool_presentation(name: &str, body: Option<&str>) -> ToolPresentation
 
     if body.contains("```")
         || body.lines().count() > 4
-        || body.lines().any(|line| line.starts_with('+') || line.starts_with('-') || line.contains(" | "))
+        || body
+            .lines()
+            .any(|line| line.starts_with('+') || line.starts_with('-') || line.contains(" | "))
         || body.len() > 160
     {
         ToolPresentation::Block

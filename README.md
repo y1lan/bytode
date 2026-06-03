@@ -11,7 +11,7 @@ bytode 是一个终端编码代理（ReAct 循环 + DeepSeek + LSP + TUI），�
 ```bash
 git clone https://github.com/y1lan/bytode.git
 cd bytode
-cargo install --path .
+cargo install --path crates/bytode-cli
 ```
 
 `~/.cargo/bin/bytode` 安装完成后即可全局使用：
@@ -200,37 +200,43 @@ forbidden_write_patterns = ["/etc/*", "/boot/*"]
 
 ## 架构
 
+项目现在是 Cargo workspace：
+
 ```
-src/
-├── main.rs           # CLI (clap) — 装配、会话管理、LSP 启动
-├── repl.rs           # 异步 REPL — tokio::select! + crossterm EventStream
-├── config.rs         # 三层 TOML 配置加载器
-├── project.rs        # 标记文件检测（Cargo.toml / go.mod / package.json …）
-├── error.rs          # BytodeError 统一错误类型 (thiserror)
-├── agent/
-│   ├── mod.rs        # Agent — ReAct 循环、模式切换、工具参数格式化
-│   ├── context.rs    # ContextBuilder — 核心提示词 + SOP + 上下文估算
-│   └── memory.rs     # MemoryLayer — 确定性压缩（>80% 且 >10 轮触发）
-├── tools/
-│   ├── mod.rs        # Tool trait + ToolRegistry + ToolResult 枚举
-│   ├── file.rs       # read_file（含目录列表）/ write_file（原子 + diff）
-│   ├── search.rs     # search_code (ripgrep --json)
-│   ├── check.rs      # cargo_check (cargo check --json + simple filter)
-│   ├── lsp_diag.rs   # get_diagnostics (rust-analyzer 缓存)
-│   ├── cargo.rs      # cargo (白名单子命令)
-│   ├── web.rs        # web_search (DuckDuckGo HTML 解析)
-│   └── git.rs        # git_status / git_diff / git_log
-├── lsp/
-│   ├── client.rs     # rust-analyzer JSON-RPC 客户端（含 didChange/didOpen）
-│   └── types.rs      # LSP 诊断类型
-├── llm/
-│   └── mod.rs        # DeepSeekClient — SSE 流式 + token 计费 + 会话成本
-└── ui/
-    ├── mod.rs        # Terminal 封装（ratatui + crossterm）
-    ├── layout.rs     # 布局引擎（滚动偏移、侧栏、审批弹窗）
-    ├── render.rs     # Markdown 渲染 + Rust 语法高亮 + diff 行着色
-    └── statusbar.rs  # 状态栏（模式、耗时、成本、上下文用量）
+Cargo.toml
+crates/
+├── bytode-common/    # error/config/project/共享基础类型
+├── bytode-llm/       # DeepSeekClient、SSE 流式、token 成本统计、OpenAI-compatible 类型
+├── bytode-lsp/       # LSP client、types、诊断缓存、didOpen/didChange/shutdown
+├── bytode-tools/     # Tool trait、ToolRegistry、内置工具实现
+├── bytode-agent/     # ReAct 循环、ContextBuilder、MemoryLayer、工具调度
+└── bytode-cli/       # main.rs、repl.rs、ui/、clap、TUI 装配、会话入口
 ```
+
+依赖方向保持单向：
+
+```text
+bytode-cli -> bytode-agent
+bytode-cli -> bytode-lsp
+bytode-cli -> bytode-tools
+bytode-cli -> bytode-llm
+bytode-cli -> bytode-common
+
+bytode-agent -> bytode-tools
+bytode-agent -> bytode-llm
+bytode-agent -> bytode-common
+
+bytode-tools -> bytode-lsp
+bytode-tools -> bytode-common
+
+bytode-lsp -> bytode-common
+bytode-llm -> bytode-common
+```
+
+这意味着：
+- 后续做自定义上下文压缩，主要改 `bytode-agent`
+- 后续扩展更多工具调用，主要改 `bytode-tools`
+- 后续增加更多语言/LSP 支持，主要改 `bytode-lsp`
 
 ## 核心设计
 

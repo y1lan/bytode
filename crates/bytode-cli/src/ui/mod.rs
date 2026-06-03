@@ -7,9 +7,9 @@ pub mod statusbar;
 pub mod window_manager;
 
 use crossterm::{
-    execute,
     event::{DisableMouseCapture, EnableMouseCapture},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::prelude::*;
 use std::io::{self, Stdout};

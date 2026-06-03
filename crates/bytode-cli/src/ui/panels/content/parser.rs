@@ -1,6 +1,5 @@
 use super::model::{
-    AssistantMessage, AssistantPart, ReasoningPart, TextPart, ToolPart, ToolPresentation,
-    ToolState,
+    AssistantMessage, AssistantPart, ReasoningPart, TextPart, ToolPart, ToolPresentation, ToolState,
 };
 use crate::ui::events::ExecState;
 
@@ -34,8 +33,10 @@ pub(crate) fn parse_assistant_message(
             }
 
             let joined_body = join_nonempty_lines(&body);
-            let state = classify_tool_state(&tool_summary, joined_body.as_deref(), current_tool_state);
-            let presentation = choose_tool_presentation(&tool_summary, joined_body.as_deref(), state);
+            let state =
+                classify_tool_state(&tool_summary, joined_body.as_deref(), current_tool_state);
+            let presentation =
+                choose_tool_presentation(&tool_summary, joined_body.as_deref(), state);
             let collapsed = joined_body
                 .as_deref()
                 .map(|value| value.lines().count() > 6)

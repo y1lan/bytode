@@ -1,14 +1,13 @@
 #![allow(dead_code)]
 
-mod agent;
-mod config;
-mod error;
-mod llm;
-mod lsp;
-mod project;
 mod repl;
-mod tools;
 mod ui;
+
+pub use bytode_agent as agent;
+pub use bytode_common::{config, error, project};
+pub use bytode_llm as llm;
+pub use bytode_lsp as lsp;
+pub use bytode_tools as tools;
 
 use agent::Agent;
 use clap::Parser;
@@ -24,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tools::{
+    ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
     cargo::CargoTool,
     check::CheckTool,
     file::{ReadFileTool, WriteFileTool},
@@ -31,7 +31,6 @@ use tools::{
     lsp_diag::DiagnosticsTool,
     search::SearchTool,
     web::SearchWebTool,
-    ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
 };
 use ui::panels::HistoryEntry;
 
@@ -49,8 +48,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let log_file = File::create("/tmp/bytode.log")
-        .expect("failed to create /tmp/bytode.log");
+    let log_file = File::create("/tmp/bytode.log").expect("failed to create /tmp/bytode.log");
     tracing_subscriber::fmt()
         .with_writer(Mutex::new(log_file))
         .with_ansi(false)
@@ -83,7 +81,9 @@ async fn main() -> Result<()> {
 
     let tools: Vec<ToolEntry> = vec![
         ToolEntry {
-            tool: Box::new(ReadFileTool { project_root: project_root.clone() }),
+            tool: Box::new(ReadFileTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         },
@@ -108,14 +108,22 @@ async fn main() -> Result<()> {
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(CheckTool { extra_args: config.build.extra_check_flags.clone() }),
+            tool: Box::new(CheckTool {
+                extra_args: config.build.extra_check_flags.clone(),
+            }),
             category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage { requires: &["rust"] },
+            availability: ToolAvailability::PrimaryLanguage {
+                requires: &["rust"],
+            },
         },
         ToolEntry {
-            tool: Box::new(DiagnosticsTool { lsp: lsp_client.clone() }),
+            tool: Box::new(DiagnosticsTool {
+                lsp: lsp_client.clone(),
+            }),
             category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::DetectedLanguage { languages: &["rust"] },
+            availability: ToolAvailability::DetectedLanguage {
+                languages: &["rust"],
+            },
         },
         ToolEntry {
             tool: Box::new(SearchWebTool {
@@ -126,32 +134,46 @@ async fn main() -> Result<()> {
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(CargoTool { project_root: project_root.clone() }),
+            tool: Box::new(CargoTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage { requires: &["rust"] },
+            availability: ToolAvailability::PrimaryLanguage {
+                requires: &["rust"],
+            },
         },
         ToolEntry {
-            tool: Box::new(GitStatusTool { project_root: project_root.clone() }),
+            tool: Box::new(GitStatusTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(GitDiffTool { project_root: project_root.clone() }),
+            tool: Box::new(GitDiffTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(GitLogTool { project_root: project_root.clone() }),
+            tool: Box::new(GitLogTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::ReadOnly,
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(GitCommitTool { project_root: project_root.clone() }),
+            tool: Box::new(GitCommitTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::Modification,
             availability: ToolAvailability::Always,
         },
         ToolEntry {
-            tool: Box::new(GitPushTool { project_root: project_root.clone() }),
+            tool: Box::new(GitPushTool {
+                project_root: project_root.clone(),
+            }),
             category: ToolCategory::Modification,
             availability: ToolAvailability::Always,
         },
@@ -162,14 +184,23 @@ async fn main() -> Result<()> {
         config::ToolSelection::Exact { enabled } => {
             (enabled.iter().cloned().collect(), HashSet::new(), true)
         }
-        config::ToolSelection::Additive { enable, disable } => {
-            (enable.iter().cloned().collect(), disable.iter().cloned().collect(), false)
-        }
+        config::ToolSelection::Additive { enable, disable } => (
+            enable.iter().cloned().collect(),
+            disable.iter().cloned().collect(),
+            false,
+        ),
         config::ToolSelection::None => (HashSet::new(), HashSet::new(), false),
     };
 
     let llm = DeepSeekClient::new(api_key, cli.model.clone(), None)?;
-    let mut agent = Agent::new(llm, registry, &profile, &enabled_set, &disabled_set, is_exact);
+    let mut agent = Agent::new(
+        llm,
+        registry,
+        &profile,
+        &enabled_set,
+        &disabled_set,
+        is_exact,
+    );
 
     // Session persistence
     let session_dir = dirs::home_dir().unwrap().join(".bycode").join("sessions");
@@ -278,9 +309,10 @@ fn get_git_branch(root: &Path) -> Option<String> {
 
 fn is_git_dirty(root: &Path) -> bool {
     if let Ok(repo) = git2::Repository::open(root)
-        && let Ok(statuses) = repo.statuses(None) {
-            return !statuses.is_empty();
-        }
+        && let Ok(statuses) = repo.statuses(None)
+    {
+        return !statuses.is_empty();
+    }
     false
 }
 
@@ -336,12 +368,10 @@ fn session_list(session_dir: &Path) -> Vec<SessionEntry> {
                 .ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|v| {
-                    v.get("project_path")
-                        .and_then(|p| p.as_str())
-                        .map(|p| {
-                            let home = std::env::var("HOME").unwrap_or_default();
-                            p.replace(&home, "~")
-                        })
+                    v.get("project_path").and_then(|p| p.as_str()).map(|p| {
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        p.replace(&home, "~")
+                    })
                 })
                 .unwrap_or_else(|| hash.clone());
             let turns = std::fs::read_to_string(&path)
@@ -349,11 +379,7 @@ fn session_list(session_dir: &Path) -> Vec<SessionEntry> {
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|v| v.get("turns").and_then(|t| t.as_array().map(|a| a.len())))
                 .unwrap_or(0);
-            entries.push(SessionEntry {
-                name,
-                path,
-                turns,
-            });
+            entries.push(SessionEntry { name, path, turns });
         }
     }
     entries.sort_by(|a, b| {

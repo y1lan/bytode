@@ -17,7 +17,7 @@ pub struct AssistantMessage {
 }
 
 impl AssistantMessage {
-    pub(crate) fn from_text(text: String) -> Self {
+    pub fn from_text(text: String) -> Self {
         Self {
             parts: vec![AssistantPart::Text(TextPart { content: text })],
         }
@@ -66,10 +66,4 @@ pub enum ToolState {
 pub enum ToolPresentation {
     Inline,
     Block,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ScrollMode {
-    Auto,
-    Manual(usize),
 }

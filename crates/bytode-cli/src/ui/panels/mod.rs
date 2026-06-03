@@ -3,10 +3,7 @@ mod input;
 mod sidebar;
 mod status_bar;
 
-pub use content::{
-    AssistantMessage, AssistantPart, ContentPanel, HistoryEntry, TextPart, ToolPart,
-    ToolPresentation, ToolState, UserMessage,
-};
+pub use content::{ContentPanel, HistoryEntry};
 pub use input::InputPanel;
 pub use sidebar::SidebarPanel;
 pub use status_bar::StatusBarPanel;

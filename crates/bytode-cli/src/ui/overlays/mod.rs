@@ -307,7 +307,9 @@ mod tests {
             capture: true,
         });
 
-        let effects = stack.handle_modal_key(KeyAction::Enter).expect("modal effects");
+        let effects = stack
+            .handle_modal_key(KeyAction::Enter)
+            .expect("modal effects");
         assert_eq!(effects, vec![Effect::CloseOverlay(OverlayId::Dialog)]);
     }
 }
