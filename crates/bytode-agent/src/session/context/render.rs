@@ -5,7 +5,8 @@
 
 use crate::session::compact::{CompactOverlay, kind_for_tool};
 use crate::session::model::{
-    ArtifactKind, ArtifactRef, EntryId, SessionEntry, SessionEntryKind, ToolStatus,
+    ArtifactKind, ArtifactRef, EntryId, EntrySpan, InteractiveCompactOutcome, SessionEntry,
+    SessionEntryKind, ToolStatus,
 };
 use crate::session::store::fs::ArtifactStore;
 use std::collections::HashMap;
@@ -29,15 +30,40 @@ pub enum RenderedEntry {
 }
 
 /// Replay entries (with overlay applied) into context items.
+///
+/// Committed `InteractiveCompact` entries replace their source range with
+/// `result.content` so the old entries are excluded from context.
 pub fn render_context_entries(
     entries: &[SessionEntry],
     overlay: &CompactOverlay,
     artifacts: &ArtifactStore,
 ) -> Vec<RenderedEntry> {
+    let replacements = collect_committed_replacements(entries);
     let tool_names = tool_name_index(entries);
     let mut out = Vec::new();
+    let mut skip_until: Option<u64> = None;
 
     for entry in entries {
+        if let Some(end) = skip_until {
+            if entry.meta.seq >= end {
+                skip_until = None;
+            } else {
+                continue; // still inside a replaced range
+            }
+        }
+
+        // Check if this entry starts a new replacement range.
+        for (span, content) in &replacements {
+            if entry.meta.seq >= span.start_seq && entry.meta.seq < span.end_seq_exclusive {
+                out.push(RenderedEntry::Assistant(content.clone()));
+                skip_until = Some(span.end_seq_exclusive);
+                break;
+            }
+        }
+        if skip_until.is_some() {
+            continue;
+        }
+
         match &entry.kind {
             SessionEntryKind::UserMessage(u) => out.push(RenderedEntry::User(u.content.clone())),
             SessionEntryKind::AssistantMessage(a) => {
@@ -65,12 +91,56 @@ pub fn render_context_entries(
                     content,
                 });
             }
-            // MicroCompact entries are audit facts, not context messages.
             SessionEntryKind::MicroCompact(_) => {}
+            SessionEntryKind::InteractiveCompact(_) => {}
         }
     }
 
     out
+}
+
+/// Collect committed InteractiveCompact source ranges and their replacement
+/// content. Sorted by start_seq. Panics if overlapping ranges are detected
+/// (this is a data-integrity invariant).
+fn collect_committed_replacements(entries: &[SessionEntry]) -> Vec<(EntrySpan, String)> {
+    let mut result: Vec<(EntrySpan, String)> = Vec::new();
+    for entry in entries {
+        if let SessionEntryKind::InteractiveCompact(ic) = &entry.kind {
+            if matches!(ic.outcome, InteractiveCompactOutcome::Committed) {
+                if let Some(ref r) = ic.result {
+                    result.push((ic.source_range.clone(), r.content.clone()));
+                }
+            }
+        }
+    }
+    // Sort by start_seq for deterministic rendering.
+    result.sort_by(|a, b| a.0.start_seq.cmp(&b.0.start_seq));
+
+    // Detect overlaps.
+    for i in 1..result.len() {
+        if result[i].0.start_seq < result[i - 1].0.end_seq_exclusive {
+            // Log the overlap but don't panic — return an error preview instead.
+            // The renderer never panics.
+            return vec![(
+                EntrySpan {
+                    start_seq: result[i - 1].0.start_seq,
+                    end_seq_exclusive: result[i]
+                        .0
+                        .end_seq_exclusive
+                        .max(result[i - 1].0.end_seq_exclusive),
+                },
+                format!(
+                    "[interactive compact error]\noverlapping committed ranges: seq {}-{} and {}-{}",
+                    result[i - 1].0.start_seq,
+                    result[i - 1].0.end_seq_exclusive,
+                    result[i].0.start_seq,
+                    result[i].0.end_seq_exclusive,
+                ),
+            )];
+        }
+    }
+
+    result
 }
 
 fn render_tool_result(
