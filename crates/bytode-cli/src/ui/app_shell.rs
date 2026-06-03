@@ -250,6 +250,58 @@ impl AppShell {
                     agent.tool_names().join(", ")
                 ));
             }
+            SlashCommand::Compact => match agent.start_interactive_compact() {
+                Ok(()) => {
+                    self.content_panel_mut().push_assistant(
+                        "Interactive compact started. Send modification requests, then /commit or /abort.".into(),
+                    );
+                    self.show_notice("compact — /commit or /abort".into());
+                }
+                Err(e) => {
+                    self.content_panel_mut()
+                        .push_error(format!("Cannot start interactive compact: {e}"));
+                }
+            },
+            SlashCommand::CommitCompact => {
+                if !agent.is_in_interactive_compact() {
+                    self.content_panel_mut().push_error(
+                        "Not in an interactive compact session. Use /compact first.".into(),
+                    );
+                } else {
+                    match agent.commit_interactive_compact() {
+                        Ok(entry) => {
+                            self.content_panel_mut().push_assistant(format!(
+                                "Compact committed. {}",
+                                entry.operation_digest
+                            ));
+                            self.show_notice(String::new());
+                        }
+                        Err(e) => {
+                            self.content_panel_mut()
+                                .push_error(format!("Commit failed: {e}"));
+                        }
+                    }
+                }
+            }
+            SlashCommand::AbortCompact => {
+                if !agent.is_in_interactive_compact() {
+                    self.content_panel_mut().push_error(
+                        "Not in an interactive compact session. Use /compact first.".into(),
+                    );
+                } else {
+                    match agent.abort_interactive_compact() {
+                        Ok(()) => {
+                            self.content_panel_mut()
+                                .push_assistant("Compact aborted.".into());
+                            self.show_notice(String::new());
+                        }
+                        Err(e) => {
+                            self.content_panel_mut()
+                                .push_error(format!("Abort failed: {e}"));
+                        }
+                    }
+                }
+            }
             SlashCommand::Unknown => {
                 self.content_panel_mut()
                     .push_error(format!("Unknown command: {command}"));
@@ -371,7 +423,12 @@ impl AppShell {
                     *effect = Effect::Exit;
                     continue;
                 }
-                if input.starts_with("/model") || input.starts_with("/plan") {
+                if input.starts_with("/model")
+                    || input.starts_with("/plan")
+                    || input == "/compact"
+                    || input == "/commit"
+                    || input == "/abort"
+                {
                     *effect = Effect::HandleSlashCommand(input.clone());
                     continue;
                 }
@@ -455,12 +512,24 @@ enum SlashCommand {
     Exit,
     Model(Option<String>),
     Plan(Option<String>),
+    Compact,
+    CommitCompact,
+    AbortCompact,
     Unknown,
 }
 
 fn parse_slash_command(command: &str) -> SlashCommand {
     if command == "/exit" || command == "/quit" {
         return SlashCommand::Exit;
+    }
+    if command == "/compact" {
+        return SlashCommand::Compact;
+    }
+    if command == "/commit" {
+        return SlashCommand::CommitCompact;
+    }
+    if command == "/abort" {
+        return SlashCommand::AbortCompact;
     }
     if command.starts_with("/model") {
         let model = command.split_whitespace().nth(1).map(str::to_string);
@@ -480,6 +549,7 @@ fn mode_label(mode: AgentMode) -> &'static str {
     match mode {
         AgentMode::Normal => "build",
         AgentMode::Plan => "plan",
+        AgentMode::InteractiveCompact => "compact",
     }
 }
 
