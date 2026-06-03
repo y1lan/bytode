@@ -7,10 +7,11 @@
 
 use bytode_agent::session::compact::run_micro_compact;
 use bytode_agent::session::{
-    ArtifactId, ArtifactKind, ArtifactRef, CompactOverlay, EntryId, EntryMeta, MicroCompactEntry,
-    MicroCompactPolicy, RenderedEntry, SessionEntry, SessionEntryKind, SessionId, SessionRuntime,
-    SessionStore, ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
-    render_context_entries,
+    ArtifactId, ArtifactKind, ArtifactRef, AssistantMessageEntry, CompactOverlay, EntryId,
+    EntryMeta, EntrySpan, InteractiveCompactEntry, InteractiveCompactOutcome,
+    InteractiveCompactResult, MicroCompactEntry, MicroCompactPolicy, RenderedEntry, SessionEntry,
+    SessionEntryKind, SessionId, SessionRuntime, SessionStore, ToolCallEntry, ToolResultEntry,
+    ToolStatus, UserMessageEntry, render_context_entries,
 };
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -305,4 +306,309 @@ fn context_pressure_no_bloat_returns_none() {
             .unwrap()
             .is_none()
     );
+}
+
+// ------------------------------------------------------------------
+// Interactive compact tests
+// ------------------------------------------------------------------
+
+fn compact_artifact(store: &SessionStore, content: &str) -> ArtifactRef {
+    let meta = store.next_meta();
+    store
+        .artifacts()
+        .write(&meta, ArtifactKind::CompactArchive, content)
+        .unwrap()
+}
+
+#[test]
+fn interactive_compact_entry_is_serializable() {
+    let span = EntrySpan {
+        start_seq: 5,
+        end_seq_exclusive: 10,
+    };
+    let entry = InteractiveCompactEntry {
+        source_range: span.clone(),
+        compact_session_id: SessionId("cs".into()),
+        outcome: InteractiveCompactOutcome::Committed,
+        result: Some(InteractiveCompactResult {
+            content: "compressed summary".into(),
+            evidence_pack_ref: ArtifactRef {
+                id: ArtifactId("abc".into()),
+                kind: ArtifactKind::CompactArchive,
+                relative_path: PathBuf::from("artifacts/compact/abc.txt"),
+                source_entry_id: EntryId::from_seq(0),
+                byte_len: 100,
+                sha256: "abc".into(),
+                preview: "preview".into(),
+            },
+        }),
+        operation_digest: "compacted 5 entries".into(),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let _round: InteractiveCompactEntry = serde_json::from_str(&json).unwrap();
+}
+
+#[test]
+fn interactive_compact_commit_writes_entry_to_log() {
+    let mut store =
+        SessionStore::open(SessionId("ic-commit".into()), temp_root("ic-commit")).unwrap();
+    let art = compact_artifact(&store, "evidence");
+
+    let meta = store.next_meta();
+    let ic = InteractiveCompactEntry {
+        source_range: EntrySpan {
+            start_seq: 0,
+            end_seq_exclusive: 3,
+        },
+        compact_session_id: SessionId("cs".into()),
+        outcome: InteractiveCompactOutcome::Committed,
+        result: Some(InteractiveCompactResult {
+            content: "compressed".into(),
+            evidence_pack_ref: art,
+        }),
+        operation_digest: "done".into(),
+    };
+    store
+        .commit(SessionEntry {
+            meta,
+            kind: SessionEntryKind::InteractiveCompact(ic),
+        })
+        .unwrap();
+
+    let entries = store.replay_entries().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(matches!(
+        entries[0].kind,
+        SessionEntryKind::InteractiveCompact(_)
+    ));
+}
+
+#[test]
+fn interactive_compact_context_replaces_source_range() {
+    let mut store = SessionStore::open(SessionId("ic-ctx".into()), temp_root("ic-ctx")).unwrap();
+
+    commit(
+        &mut store,
+        SessionEntryKind::UserMessage(UserMessageEntry {
+            content: "old message".into(),
+        }),
+    );
+    commit(
+        &mut store,
+        SessionEntryKind::AssistantMessage(bytode_agent::session::AssistantMessageEntry {
+            content: "old response".into(),
+        }),
+    );
+    commit(
+        &mut store,
+        SessionEntryKind::UserMessage(UserMessageEntry {
+            content: "recent message".into(),
+        }),
+    );
+
+    let art = compact_artifact(&store, "evidence");
+    let ic = InteractiveCompactEntry {
+        source_range: EntrySpan {
+            start_seq: 0,
+            end_seq_exclusive: 2,
+        },
+        compact_session_id: SessionId("cs".into()),
+        outcome: InteractiveCompactOutcome::Committed,
+        result: Some(InteractiveCompactResult {
+            content: "REPLACED".into(),
+            evidence_pack_ref: art,
+        }),
+        operation_digest: "done".into(),
+    };
+    let meta = store.next_meta();
+    store
+        .commit(SessionEntry {
+            meta,
+            kind: SessionEntryKind::InteractiveCompact(ic),
+        })
+        .unwrap();
+
+    let entries = store.replay_entries().unwrap();
+    let overlay = CompactOverlay::from_entries(&entries);
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+
+    assert!(matches!(&rendered[0], RenderedEntry::Assistant(s) if s == "REPLACED"));
+    assert!(matches!(&rendered[1], RenderedEntry::User(s) if s == "recent message"));
+}
+
+#[test]
+fn interactive_compact_tail_preserves_micro_compact() {
+    let mut store = SessionStore::open(SessionId("ic-tail".into()), temp_root("ic-tail")).unwrap();
+
+    commit(
+        &mut store,
+        SessionEntryKind::UserMessage(UserMessageEntry {
+            content: "user".into(),
+        }),
+    );
+    commit(
+        &mut store,
+        SessionEntryKind::ToolCall(ToolCallEntry {
+            tool_name: "web_search".into(),
+            inline_args: Some(serde_json::json!({"q": "x"})),
+            arg_artifacts: vec![],
+            parent_assistant_entry_id: None,
+        }),
+    );
+    commit(
+        &mut store,
+        SessionEntryKind::ToolResult(ToolResultEntry {
+            call_entry_id: EntryId::from_seq(1),
+            status: ToolStatus::Ok,
+            inline_content: Some(
+                "this is a big tool result that is well over the compact threshold".into(),
+            ),
+            artifacts: vec![],
+            preview: None,
+        }),
+    );
+
+    // Micro compact on the tool result
+    // keep_recent_entries=0 so the tool result (last entry) is eligible
+    run_micro_compact(
+        &mut store,
+        &MicroCompactPolicy {
+            keep_recent_entries: 0,
+            keep_recent_turns: 0,
+            max_inline_tool_output_chars: 10,
+            ..MicroCompactPolicy::default()
+        },
+    )
+    .unwrap();
+
+    // Interactive compact replaces only seq 0 (the user message)
+    let art = compact_artifact(&store, "evidence");
+    let ic = InteractiveCompactEntry {
+        source_range: EntrySpan {
+            start_seq: 0,
+            end_seq_exclusive: 1,
+        },
+        compact_session_id: SessionId("cs".into()),
+        outcome: InteractiveCompactOutcome::Committed,
+        result: Some(InteractiveCompactResult {
+            content: "REPLACED_USER".into(),
+            evidence_pack_ref: art,
+        }),
+        operation_digest: "done".into(),
+    };
+    let meta = store.next_meta();
+    store
+        .commit(SessionEntry {
+            meta,
+            kind: SessionEntryKind::InteractiveCompact(ic),
+        })
+        .unwrap();
+
+    let entries = store.replay_entries().unwrap();
+    let overlay = CompactOverlay::from_entries(&entries);
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+
+    assert!(matches!(&rendered[0], RenderedEntry::Assistant(s) if s == "REPLACED_USER"));
+    assert!(matches!(&rendered[1], RenderedEntry::ToolCall { name, .. } if name == "web_search"));
+    assert!(
+        matches!(&rendered[2], RenderedEntry::ToolResult { content, .. }
+        if content.starts_with("[tool output compacted]"))
+    );
+}
+
+#[test]
+fn interactive_compact_overlap_produces_error_preview() {
+    let mut store =
+        SessionStore::open(SessionId("ic-overlap".into()), temp_root("ic-overlap")).unwrap();
+
+    commit(
+        &mut store,
+        SessionEntryKind::UserMessage(UserMessageEntry {
+            content: "msg".into(),
+        }),
+    );
+
+    let art = compact_artifact(&store, "evidence");
+
+    for (start, end) in [(0, 2), (1, 3)] {
+        let ic = InteractiveCompactEntry {
+            source_range: EntrySpan {
+                start_seq: start,
+                end_seq_exclusive: end,
+            },
+            compact_session_id: SessionId("cs".into()),
+            outcome: InteractiveCompactOutcome::Committed,
+            result: Some(InteractiveCompactResult {
+                content: "ignored".into(),
+                evidence_pack_ref: art.clone(),
+            }),
+            operation_digest: "done".into(),
+        };
+        let meta = store.next_meta();
+        store
+            .commit(SessionEntry {
+                meta,
+                kind: SessionEntryKind::InteractiveCompact(ic),
+            })
+            .unwrap();
+    }
+
+    let entries = store.replay_entries().unwrap();
+    let overlay = CompactOverlay::from_entries(&entries);
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+
+    let has_error = rendered.iter().any(|r| {
+        matches!(r, RenderedEntry::Assistant(s) if s.starts_with("[interactive compact error]"))
+    });
+    assert!(has_error);
+}
+
+#[test]
+fn interactive_compact_abort_does_not_affect_context() {
+    let mut store =
+        SessionStore::open(SessionId("ic-abort".into()), temp_root("ic-abort")).unwrap();
+
+    commit(
+        &mut store,
+        SessionEntryKind::UserMessage(UserMessageEntry {
+            content: "msg".into(),
+        }),
+    );
+
+    let ic = InteractiveCompactEntry {
+        source_range: EntrySpan {
+            start_seq: 0,
+            end_seq_exclusive: 1,
+        },
+        compact_session_id: SessionId("cs".into()),
+        outcome: InteractiveCompactOutcome::Aborted,
+        result: None,
+        operation_digest: "aborted".into(),
+    };
+    let meta = store.next_meta();
+    store
+        .commit(SessionEntry {
+            meta,
+            kind: SessionEntryKind::InteractiveCompact(ic),
+        })
+        .unwrap();
+
+    let entries = store.replay_entries().unwrap();
+    let overlay = CompactOverlay::from_entries(&entries);
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+
+    assert!(matches!(&rendered[0], RenderedEntry::User(s) if s == "msg"));
+}
+
+#[test]
+fn interactive_compact_evidence_pack_is_artifactual() {
+    let mut store =
+        SessionStore::open(SessionId("ic-evidence".into()), temp_root("ic-evidence")).unwrap();
+
+    let evidence_content = r#"{"source_range":{"start_seq":0,"end_seq_exclusive":5}}"#;
+    let art = compact_artifact(&store, evidence_content);
+
+    assert!(store.artifacts().exists(&art));
+    let read_back = store.artifacts().read_verified(&art).unwrap();
+    assert_eq!(read_back, evidence_content);
 }
