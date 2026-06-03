@@ -6,14 +6,13 @@
 //! called without a ReAct tool-loop — it only produces text responses.
 
 use crate::error::Result;
-use crate::session::compact::{preserve_cutoff, CompactOverlay, MicroCompactPolicy};
+use crate::session::compact::{CompactOverlay, MicroCompactPolicy, preserve_cutoff};
 use crate::session::model::{
     ArtifactKind, ArtifactRef, EntryMeta, EntrySpan, InteractiveCompactEntry,
-    InteractiveCompactOutcome, InteractiveCompactResult, SessionEntry, SessionEntryKind,
-    SessionId,
+    InteractiveCompactOutcome, InteractiveCompactResult, SessionEntry, SessionEntryKind, SessionId,
 };
-use crate::session::store::fs::{new_session_id, sessions_root, sha256_hex};
 use crate::session::store::SessionStore;
+use crate::session::store::fs::{new_session_id, sessions_root, sha256_hex};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -250,10 +249,7 @@ pub fn commit_to_main_store(
 // Helpers
 // ------------------------------------------------------------------
 
-fn entry_excerpt(
-    entry: &SessionEntry,
-    overlay: &CompactOverlay,
-) -> (&'static str, String) {
+fn entry_excerpt(entry: &SessionEntry, overlay: &CompactOverlay) -> (&'static str, String) {
     // If a MicroCompact overlay provides a view, use its preview as the excerpt.
     if let Some(view) = overlay.view_for(&entry.meta.id) {
         return ("ToolResult-compacted", view.replacement_preview.clone());
@@ -283,10 +279,7 @@ fn entry_excerpt(
                 .preview
                 .clone()
                 .unwrap_or_else(|| truncate_str(r.inline_content.as_deref().unwrap_or(""), 300));
-            let tool = r
-                .call_entry_id
-                .0
-                .clone(); // approximate — caller has tool_name_index
+            let tool = r.call_entry_id.0.clone(); // approximate — caller has tool_name_index
             ("ToolResult", format!("[{}] {}", tool, preview))
         }
         SessionEntryKind::MicroCompact(mc) => ("MicroCompact", mc.operation_digest.clone()),

@@ -119,9 +119,7 @@ pub fn render_context_entries(
 /// Collect committed InteractiveCompact source ranges and their replacement
 /// content. Sorted by start_seq. Returns an error when overlapping ranges are
 /// detected.
-fn collect_committed_replacements(
-    entries: &[SessionEntry],
-) -> Result<Vec<(EntrySpan, String)>> {
+fn collect_committed_replacements(entries: &[SessionEntry]) -> Result<Vec<(EntrySpan, String)>> {
     let mut result: Vec<(EntrySpan, String)> = Vec::new();
     for entry in entries {
         if let SessionEntryKind::InteractiveCompact(ic) = &entry.kind {

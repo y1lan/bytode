@@ -136,7 +136,10 @@ impl DeepSeekClient {
                             if let Some(ref args) = func.arguments {
                                 entry.arguments_raw.push_str(args);
                             } else {
-                                tracing::error!(index = tc.index, "tool_call no arguments field in chunk");
+                                tracing::error!(
+                                    index = tc.index,
+                                    "tool_call no arguments field in chunk"
+                                );
                             }
                         }
                     }

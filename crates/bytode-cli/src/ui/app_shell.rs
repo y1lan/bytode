@@ -254,8 +254,7 @@ impl AppShell {
             }
             SlashCommand::Compact => match agent.start_interactive_compact() {
                 Ok(()) => {
-                    self.saved_main_entries =
-                        Some(self.content_panel_mut().save_and_clear());
+                    self.saved_main_entries = Some(self.content_panel_mut().save_and_clear());
                     self.content_panel_mut().push_assistant(
                         "Compact session — send modifications, then /commit or /abort.".into(),
                     );

@@ -19,8 +19,8 @@ use project::ProjectProfile;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tools::{
     ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
     cargo::CargoTool,
@@ -203,12 +203,10 @@ async fn main() -> Result<()> {
     )?;
 
     // Restore conversation history from the session log.
-    let chat_history_init: Vec<HistoryEntry> = agent
-        .replay_chat_history()
-        .unwrap_or_else(|e| {
-            eprintln!("Note: could not replay session history: {e}");
-            Vec::new()
-        });
+    let chat_history_init: Vec<HistoryEntry> = agent.replay_chat_history().unwrap_or_else(|e| {
+        eprintln!("Note: could not replay session history: {e}");
+        Vec::new()
+    });
 
     // Ctrl+C cancellation
     let cancel = agent.cancel_token();

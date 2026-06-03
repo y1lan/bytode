@@ -63,9 +63,7 @@ impl SessionStore {
             session_root: session_root.clone(),
             log_path: log_path.clone(),
             artifact_dir,
-            last_model_request_at: prior
-                .as_ref()
-                .and_then(|s| s.last_model_request_at),
+            last_model_request_at: prior.as_ref().and_then(|s| s.last_model_request_at),
             last_micro_compact_seq: prior.as_ref().and_then(|s| s.last_micro_compact_seq),
             turns_since_last_micro_compact: prior
                 .as_ref()

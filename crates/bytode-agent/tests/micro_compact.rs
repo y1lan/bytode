@@ -202,10 +202,22 @@ fn policy_with_auto(enabled: bool) -> MicroCompactPolicy {
 
 fn record_bloat(rt: &mut SessionRuntime, content: &str) {
     let call = rt
-        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
+        .record_tool_call(
+            "web_search",
+            None,
+            None,
+            serde_json::json!({"q": "x"}),
+            None,
+        )
         .unwrap();
-    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, content)
-        .unwrap();
+    rt.record_tool_result(
+        call,
+        None,
+        ToolStatus::Ok,
+        ArtifactKind::ToolOutput,
+        content,
+    )
+    .unwrap();
 }
 
 /// Record a user message, then some bloat, then another user message. This

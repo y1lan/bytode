@@ -86,7 +86,13 @@ fn artifact_store_write_read_sha256() {
 fn large_tool_result_is_archived() {
     let (mut rt, _root) = open("large-result");
     let call = rt
-        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
+        .record_tool_call(
+            "web_search",
+            None,
+            None,
+            serde_json::json!({"q": "x"}),
+            None,
+        )
         .unwrap();
     let big = "x".repeat(20_000); // > 16 KiB tool output inline limit
     rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
@@ -132,8 +138,14 @@ fn context_is_built_from_session_log() {
             None,
         )
         .unwrap();
-    rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::FileSnapshot, "code")
-        .unwrap();
+    rt.record_tool_result(
+        call,
+        None,
+        ToolStatus::Ok,
+        ArtifactKind::FileSnapshot,
+        "code",
+    )
+    .unwrap();
     rt.record_assistant_message("finished").unwrap();
 
     let rendered = rt.rendered_context_entries().unwrap();
@@ -155,7 +167,13 @@ fn context_is_built_from_session_log() {
 fn missing_artifact_renders_error_without_panic() {
     let (mut rt, root) = open("missing-artifact");
     let call = rt
-        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
+        .record_tool_call(
+            "web_search",
+            None,
+            None,
+            serde_json::json!({"q": "x"}),
+            None,
+        )
         .unwrap();
     let big = "x".repeat(20_000);
     rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
@@ -180,7 +198,13 @@ fn missing_artifact_renders_error_without_panic() {
 fn checksum_mismatch_renders_error_without_panic() {
     let (mut rt, root) = open("checksum-mismatch");
     let call = rt
-        .record_tool_call("web_search", None, None, serde_json::json!({"q": "x"}), None)
+        .record_tool_call(
+            "web_search",
+            None,
+            None,
+            serde_json::json!({"q": "x"}),
+            None,
+        )
         .unwrap();
     let big = "x".repeat(20_000);
     rt.record_tool_result(call, None, ToolStatus::Ok, ArtifactKind::ToolOutput, &big)
