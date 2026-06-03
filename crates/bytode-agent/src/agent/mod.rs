@@ -502,6 +502,82 @@ impl Agent {
 
         entries
     }
+
+    /// Replay the session log and convert it into `HistoryEntry` items for UI
+    /// display. Called on startup to restore the conversation view. Audit
+    /// entries (MicroCompact, InteractiveCompact) are skipped.
+    pub fn replay_chat_history(&self) -> Result<Vec<HistoryEntry>> {
+        let entries = self.runtime.replay_entries()?;
+        let mut history = Vec::new();
+        let mut pending_tool_results: Vec<String> = Vec::new();
+
+        for entry in &entries {
+            match &entry.kind {
+                crate::session::SessionEntryKind::UserMessage(u) => {
+                    // Flush any pending tool results before the next user message.
+                    flush_tool_results(&mut history, &mut pending_tool_results);
+                    history.push(HistoryEntry::User(UserMessage {
+                        body: u.content.clone(),
+                        meta: None,
+                    }));
+                }
+                crate::session::SessionEntryKind::AssistantMessage(a) => {
+                    flush_tool_results(&mut history, &mut pending_tool_results);
+                    history.push(HistoryEntry::Assistant(AssistantMessage::from_text(
+                        a.content.clone(),
+                    )));
+                }
+                crate::session::SessionEntryKind::ToolCall(tc) => {
+                    let summary = format!("{} (args archived)", tc.tool_name);
+                    let body = tc
+                        .inline_args
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "(archived)".into());
+                    pending_tool_results.push(format!("{summary}\n{body}"));
+                }
+                crate::session::SessionEntryKind::ToolResult(tr) => {
+                    let preview = tr
+                        .preview
+                        .clone()
+                        .or_else(|| tr.inline_content.clone())
+                        .unwrap_or_else(|| "(result archived)".into());
+                    // Attach to the most recent pending tool call.
+                    if let Some(last) = pending_tool_results.last_mut() {
+                        last.push_str(&format!("\n→ {preview}"));
+                    } else {
+                        pending_tool_results.push(format!("tool result: {preview}"));
+                    }
+                }
+                // Audit-only entries — not shown in conversation history.
+                crate::session::SessionEntryKind::MicroCompact(_)
+                | crate::session::SessionEntryKind::InteractiveCompact(_) => {}
+            }
+        }
+        flush_tool_results(&mut history, &mut pending_tool_results);
+
+        Ok(history)
+    }
+}
+
+fn flush_tool_results(history: &mut Vec<HistoryEntry>, pending: &mut Vec<String>) {
+    if pending.is_empty() {
+        return;
+    }
+    let parts: Vec<AssistantPart> = std::mem::take(pending)
+        .into_iter()
+        .map(|body| {
+            AssistantPart::Tool(ToolPart {
+                name: String::new(),
+                summary: String::new(),
+                body: Some(body),
+                state: crate::transcript::ToolState::Completed,
+                presentation: crate::transcript::ToolPresentation::Block,
+                collapsed: true,
+            })
+        })
+        .collect();
+    history.push(HistoryEntry::Assistant(AssistantMessage { parts }));
 }
 
 #[derive(Debug, Clone)]

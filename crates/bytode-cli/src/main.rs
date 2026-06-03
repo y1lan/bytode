@@ -206,8 +206,13 @@ async fn main() -> Result<()> {
         session_root,
     )?;
 
-    // UI transcript starts empty; the session log holds full context on resume.
-    let chat_history_init: Vec<HistoryEntry> = Vec::new();
+    // Restore conversation history from the session log.
+    let chat_history_init: Vec<HistoryEntry> = agent
+        .replay_chat_history()
+        .unwrap_or_else(|e| {
+            eprintln!("Note: could not replay session history: {e}");
+            Vec::new()
+        });
 
     // Ctrl+C cancellation
     let cancel = agent.cancel_token();
