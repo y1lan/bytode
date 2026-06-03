@@ -157,22 +157,84 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 name = "bytode"
 version = "0.1.0"
 dependencies = [
- "async-openai",
- "async-trait",
+ "bytode-agent",
+ "bytode-common",
+ "bytode-llm",
+ "bytode-lsp",
+ "bytode-tools",
  "clap",
  "crossterm",
  "dirs",
  "futures",
  "git2",
  "ratatui",
- "reqwest",
- "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bytode-agent"
+version = "0.1.0"
+dependencies = [
+ "async-openai",
+ "bytode-common",
+ "bytode-llm",
+ "bytode-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bytode-common"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
+name = "bytode-llm"
+version = "0.1.0"
+dependencies = [
+ "async-openai",
+ "bytode-common",
+ "futures",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bytode-lsp"
+version = "0.1.0"
+dependencies = [
+ "bytode-common",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "bytode-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytode-common",
+ "bytode-lsp",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
