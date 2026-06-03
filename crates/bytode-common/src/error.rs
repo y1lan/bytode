@@ -17,6 +17,9 @@ pub enum BytodeError {
     #[error("tool '{tool}': {message}")]
     Tool { tool: String, message: String },
 
+    #[error("session: {0}")]
+    Session(String),
+
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
 

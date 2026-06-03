@@ -8,7 +8,9 @@ async-openai.workspace = true
 bytode-common = { path = "../bytode-common" }
 bytode-llm = { path = "../bytode-llm" }
 bytode-tools = { path = "../bytode-tools" }
+dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
