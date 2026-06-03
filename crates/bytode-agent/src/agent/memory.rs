@@ -1,6 +1,12 @@
+//! In-process recent-turn structure backing the UI transcript only.
+//!
+//! It is NOT the context source (that is the session log) and it never
+//! generates task facts or summaries — the old `## Task / ## Files Modified /
+//! ## Errors Resolved` summary compaction has been removed.
+
 use crate::tools::ToolResult;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Turn {
@@ -40,51 +46,12 @@ impl Turn {
 
 pub struct MemoryLayer {
     recent: VecDeque<Turn>,
-    summary: Option<String>,
-    max_recent: usize,
-    compress_threshold: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct SessionData {
-    pub project_path: Option<String>,
-    pub turns: Vec<Turn>,
-    pub summary: Option<String>,
 }
 
 impl MemoryLayer {
-    pub fn new(max_recent: usize) -> Self {
+    pub fn new() -> Self {
         MemoryLayer {
             recent: VecDeque::new(),
-            summary: None,
-            max_recent,
-            compress_threshold: 0.8,
-        }
-    }
-
-    pub fn from_session(data: SessionData, max_recent: usize) -> Self {
-        MemoryLayer {
-            recent: data.turns.into(),
-            summary: data.summary,
-            max_recent,
-            compress_threshold: 0.8,
-        }
-    }
-
-    pub fn session_data(&self) -> SessionData {
-        SessionData {
-            project_path: None,
-            turns: self
-                .recent
-                .iter()
-                .filter(|t| {
-                    // Keep turn if it has at least one successful tool call
-                    // OR it has assistant text (meaningful completion)
-                    t.assistant_text.is_some() || t.tool_calls.iter().any(|tc| !tc.is_error())
-                })
-                .cloned()
-                .collect(),
-            summary: self.summary.clone(),
         }
     }
 
@@ -99,81 +66,10 @@ impl MemoryLayer {
     pub fn recent_turns(&self) -> &VecDeque<Turn> {
         &self.recent
     }
-
-    pub fn summary(&self) -> Option<&str> {
-        self.summary.as_deref()
-    }
-
-    pub fn should_compress(&self, ctx_used: u64, ctx_total: u64) -> bool {
-        let ratio = ctx_used as f64 / ctx_total as f64;
-        ratio > self.compress_threshold && self.recent.len() > self.max_recent
-    }
-
-    pub fn compress(&mut self) -> String {
-        let to_compress: Vec<Turn> = self
-            .recent
-            .drain(..self.recent.len().saturating_sub(self.max_recent))
-            .collect();
-
-        if to_compress.is_empty() {
-            return self.summary.clone().unwrap_or_default();
-        }
-
-        let new_summary = summarize_turns(&to_compress);
-
-        self.summary = Some(match &self.summary {
-            Some(old) => merge_summaries(old, &new_summary),
-            None => new_summary,
-        });
-
-        self.summary.clone().unwrap()
-    }
 }
 
-fn summarize_turns(turns: &[Turn]) -> String {
-    let mut files_modified = HashSet::new();
-    let mut errors_fixed = Vec::new();
-    let mut task_description = String::new();
-
-    for turn in turns {
-        if let Some(ref intent) = turn.user_intent {
-            task_description = intent.clone();
-        }
-
-        for record in &turn.tool_calls {
-            match &record.result {
-                ToolResult::WriteConfirmation { path, .. } => {
-                    files_modified.insert(path.clone());
-                }
-                ToolResult::Diagnostics { list, .. } => {
-                    for d in list.iter().filter(|d| d.severity == "error") {
-                        errors_fixed.push(format!("{} [{}:{}]", d.message, d.file, d.line));
-                    }
-                }
-                _ => {}
-            }
-        }
+impl Default for MemoryLayer {
+    fn default() -> Self {
+        Self::new()
     }
-
-    let mut summary = format!("## Task\n{}\n", task_description);
-
-    if !files_modified.is_empty() {
-        summary.push_str("## Files Modified\n");
-        for f in &files_modified {
-            summary.push_str(&format!("- {}\n", f));
-        }
-    }
-
-    if !errors_fixed.is_empty() {
-        summary.push_str("## Errors Resolved\n");
-        for e in errors_fixed.iter().take(10) {
-            summary.push_str(&format!("- {}\n", e));
-        }
-    }
-
-    summary
-}
-
-fn merge_summaries(old: &str, new: &str) -> String {
-    format!("{}\n{}", old, new)
 }

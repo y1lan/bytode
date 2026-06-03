@@ -1,18 +1,20 @@
-pub mod context;
-pub mod memory;
+pub(crate) mod context;
+pub(crate) mod memory;
 
 use crate::error::Result;
 use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
 use crate::project::ProjectProfile;
+use crate::session::compact::kind_for_tool;
+use crate::session::{MicroCompactResult, SessionId, SessionRuntime, ToolStatus};
 use crate::tools::{ToolRegistry, ToolResult};
 use crate::transcript::{
     AssistantMessage, AssistantPart, HistoryEntry, TextPart, ToolPart, ToolPresentation, ToolState,
     UserMessage,
 };
-use context::ContextBuilder;
-use memory::{MemoryLayer, SessionData, Turn};
+use context::{ContextBuilder, format_tool_result};
+use memory::{MemoryLayer, Turn};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,6 +22,8 @@ pub struct Agent {
     llm: DeepSeekClient,
     registry: ToolRegistry,
     context: ContextBuilder,
+    memory: MemoryLayer,
+    runtime: SessionRuntime,
     cancelled: Arc<AtomicBool>,
     primary_language: String,
     detected_languages: HashSet<String>,
@@ -44,7 +48,9 @@ impl Agent {
         enabled: &HashSet<String>,
         disabled: &HashSet<String>,
         is_exact: bool,
-    ) -> Self {
+        session_id: SessionId,
+        session_root: PathBuf,
+    ) -> Result<Self> {
         let primary_lang = profile.primary.to_str();
         let detected: HashSet<String> = profile
             .all_languages
@@ -54,11 +60,14 @@ impl Agent {
         registry.activate_for(primary_lang, &detected, enabled, disabled, is_exact);
 
         let context = ContextBuilder::new(profile, &registry);
+        let runtime = SessionRuntime::open(session_id, session_root)?;
 
-        Agent {
+        Ok(Agent {
             llm,
             registry,
             context,
+            memory: MemoryLayer::new(),
+            runtime,
             cancelled: Arc::new(AtomicBool::new(false)),
             primary_language: primary_lang.to_string(),
             detected_languages: detected,
@@ -67,7 +76,7 @@ impl Agent {
             is_exact,
             mode: AgentMode::Normal,
             profile: profile.clone(),
-        }
+        })
     }
 
     pub fn cancel_token(&self) -> Arc<AtomicBool> {
@@ -84,8 +93,10 @@ impl Agent {
         user_input: &str,
         mut on_text: impl FnMut(&str),
     ) -> Result<AgentOutput> {
-        let turn = Turn::new(user_input);
-        self.context.memory.add_turn(turn.clone());
+        // Record the user message in the session log (context source) and in
+        // memory (UI transcript).
+        self.runtime.record_user_message(user_input)?;
+        self.memory.add_turn(Turn::new(user_input));
         let mut consecutive_errors: u32 = 0;
         const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
@@ -94,14 +105,16 @@ impl Agent {
                 return Ok(AgentOutput::Text("(cancelled)".into()));
             }
 
-            let messages = self.context.build(&turn);
+            let rendered = self.runtime.rendered_context_entries()?;
+            let messages = self.context.build(&rendered);
             let tools = self.registry.to_openai_format();
 
             let response = self.llm.chat_stream(messages, tools, &mut on_text).await?;
 
             match response {
                 LlmOutput::Text(text) => {
-                    if let Some(t) = self.context.memory.last_turn_mut() {
+                    self.runtime.record_assistant_message(&text)?;
+                    if let Some(t) = self.memory.last_turn_mut() {
                         t.assistant_text = Some(text.clone());
                     }
                     return Ok(AgentOutput::Text(text));
@@ -113,9 +126,12 @@ impl Agent {
                     let args_summary = format_args(&call.name, &call.arguments);
                     on_text(&format!("\n  ⟳ {}({})\n", tool_name, args_summary));
 
+                    let call_entry_id =
+                        self.runtime
+                            .record_tool_call(&tool_name, tool_args.clone(), None)?;
                     let tool_ref = self.registry.find(&call.name);
 
-                    let result = match self.execute_tool(&call).await {
+                    let (result, status) = match self.execute_tool(&call).await {
                         Ok(r) => {
                             if let Some(tool) = tool_ref {
                                 if let Some(display) = tool.format_result_for_display(&r) {
@@ -124,27 +140,36 @@ impl Agent {
                                     on_text("  ok\n");
                                 }
                             }
-                            r
+                            (r, ToolStatus::Ok)
                         }
                         Err(e) => {
                             let msg = format!("Error: {}", e);
                             tracing::error!(tool = %call.name, args = %call.arguments, error = %e, "Tool call failed");
                             on_text(&format!("{}\n", msg));
                             consecutive_errors += 1;
+                            let result = ToolResult::Text {
+                                source: "tool_error".into(),
+                                content: msg,
+                                truncated: false,
+                            };
                             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                self.record_tool_result(
+                                    call_entry_id,
+                                    &tool_name,
+                                    &result,
+                                    ToolStatus::Error,
+                                )?;
                                 return Ok(AgentOutput::Text(
                                     "Too many consecutive tool errors. Stopping.".into(),
                                 ));
                             }
-                            ToolResult::Text {
-                                source: "tool_error".into(),
-                                content: msg,
-                                truncated: false,
-                            }
+                            (result, ToolStatus::Error)
                         }
                     };
 
-                    if let Some(t) = self.context.memory.last_turn_mut() {
+                    self.record_tool_result(call_entry_id, &tool_name, &result, status)?;
+
+                    if let Some(t) = self.memory.last_turn_mut() {
                         t.tool_calls.push(memory::ToolCallRecord {
                             id: call.id.clone(),
                             name: tool_name,
@@ -157,6 +182,27 @@ impl Agent {
                 }
             }
         }
+    }
+
+    /// Record a tool result in the session log, classifying its artifact kind by
+    /// tool name (consistent with micro compact classification).
+    fn record_tool_result(
+        &mut self,
+        call_entry_id: crate::session::EntryId,
+        tool_name: &str,
+        result: &ToolResult,
+        status: ToolStatus,
+    ) -> Result<()> {
+        let content = format_tool_result(result);
+        let kind = kind_for_tool(tool_name);
+        self.runtime
+            .record_tool_result(call_entry_id, status, kind, &content)?;
+        Ok(())
+    }
+
+    /// Run a deterministic micro compact pass over the session log.
+    pub fn micro_compact(&mut self) -> Result<MicroCompactResult> {
+        self.runtime.micro_compact()
     }
 
     /// Non-streaming fallback
@@ -246,27 +292,10 @@ impl Agent {
             .rebuild_core_prompt(&self.profile, &self.registry);
     }
 
-    pub fn save_session(&self, path: &Path, project_path: &str) -> Result<()> {
-        let mut data = self.context.memory.session_data();
-        data.project_path = Some(project_path.to_string());
-        let json =
-            serde_json::to_string_pretty(&data).map_err(|e| crate::error::BytodeError::Json(e))?;
-        std::fs::write(path, json)?;
-        Ok(())
-    }
-
-    pub fn load_session(&mut self, path: &Path) -> Result<()> {
-        let content = std::fs::read_to_string(path)?;
-        let data: SessionData =
-            serde_json::from_str(&content).map_err(|e| crate::error::BytodeError::Json(e))?;
-        self.context.memory = MemoryLayer::from_session(data, 10);
-        Ok(())
-    }
-
     pub fn chat_history_entries(&self) -> Vec<HistoryEntry> {
         let mut entries = Vec::new();
 
-        for turn in self.context.memory.recent_turns() {
+        for turn in self.memory.recent_turns() {
             if let Some(input) = &turn.user_input {
                 entries.push(HistoryEntry::User(UserMessage {
                     body: input.clone(),
