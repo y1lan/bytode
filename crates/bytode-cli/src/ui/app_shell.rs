@@ -250,6 +250,16 @@ impl AppShell {
                     agent.tool_names().join(", ")
                 ));
             }
+            SlashCommand::CompactMicro => match agent.micro_compact() {
+                Ok(result) => {
+                    self.content_panel_mut()
+                        .push_assistant(result.operation_digest);
+                }
+                Err(e) => {
+                    self.content_panel_mut()
+                        .push_error(format!("compact micro failed: {e}"));
+                }
+            },
             SlashCommand::Unknown => {
                 self.content_panel_mut()
                     .push_error(format!("Unknown command: {command}"));
@@ -371,7 +381,10 @@ impl AppShell {
                     *effect = Effect::Exit;
                     continue;
                 }
-                if input.starts_with("/model") || input.starts_with("/plan") {
+                if input.starts_with("/model")
+                    || input.starts_with("/plan")
+                    || input.starts_with("/compact")
+                {
                     *effect = Effect::HandleSlashCommand(input.clone());
                     continue;
                 }
@@ -455,6 +468,7 @@ enum SlashCommand {
     Exit,
     Model(Option<String>),
     Plan(Option<String>),
+    CompactMicro,
     Unknown,
 }
 
@@ -472,6 +486,9 @@ fn parse_slash_command(command: &str) -> SlashCommand {
             .nth(1)
             .map(|item| item.to_lowercase());
         return SlashCommand::Plan(toggle);
+    }
+    if command.split_whitespace().collect::<Vec<_>>() == ["/compact", "micro"] {
+        return SlashCommand::CompactMicro;
     }
     SlashCommand::Unknown
 }
