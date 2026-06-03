@@ -4,11 +4,13 @@ pub(crate) mod memory;
 use crate::error::Result;
 use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
 use crate::project::ProjectProfile;
-use crate::session::compact::{kind_for_tool, preserve_cutoff};
+use crate::session::compact::interactive::{
+    self, InteractiveCompactState, build_compact_system_msg, commit_to_main_store,
+    create_compact_store, generate_evidence_pack, select_source_range,
+};
+use crate::session::compact::kind_for_tool;
 use crate::session::{
-    ArtifactKind, ArtifactRef, EntrySpan, InteractiveCompactEntry, InteractiveCompactOutcome,
-    InteractiveCompactResult, SessionEntry, SessionEntryKind, SessionId, SessionRuntime,
-    ToolStatus,
+    InteractiveCompactEntry, SessionId, SessionRuntime, ToolStatus,
 };
 use crate::tools::{ToolRegistry, ToolResult};
 use crate::transcript::{
@@ -17,7 +19,6 @@ use crate::transcript::{
 };
 use context::{ContextBuilder, format_tool_result};
 use memory::{MemoryLayer, Turn};
-use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,18 +46,6 @@ pub enum AgentMode {
     Normal,
     Plan,
     InteractiveCompact,
-}
-
-/// In-memory state for an active interactive compact session. Not persisted;
-/// only the committed `InteractiveCompactEntry` in the main session log is.
-struct InteractiveCompactState {
-    source_range: EntrySpan,
-    evidence_pack_ref: ArtifactRef,
-    /// Messages exchanged in the compact session (system prompt + user turns +
-    /// assistant responses). Never written to the main session log.
-    messages: Vec<async_openai::types::ChatCompletionRequestMessage>,
-    /// Latest assistant response — the candidate for `/commit`.
-    current_content: String,
 }
 
 impl Agent {
@@ -257,26 +246,36 @@ impl Agent {
     // ------------------------------------------------------------------
 
     /// Select a source range, generate an evidence pack, and enter
-    /// `InteractiveCompact` mode. Returns a diagnostic error when there is no
-    /// eligible range to compact.
+    /// compact session, and enter `InteractiveCompact` mode.
     pub fn start_interactive_compact(&mut self) -> Result<()> {
         let entries = self.runtime.replay_entries()?;
+        let overlay = crate::session::compact::CompactOverlay::from_entries(&entries);
+
         let source_range =
             select_source_range(&entries, self.runtime.policy()).ok_or_else(|| {
                 crate::error::BytodeError::Session(
-                    "no eligible source range to compact — all old entries are already covered"
-                        .into(),
+                    "no eligible source range to compact".into(),
                 )
             })?;
 
-        let evidence_pack_ref = self.generate_evidence_pack(&entries, &source_range)?;
-        let system_msg = build_compact_system_msg(&entries, &source_range);
+        let evidence_pack_ref = generate_evidence_pack(
+            &entries,
+            &source_range,
+            &overlay,
+            self.runtime.artifact_store(),
+            self.runtime.session_id(),
+        )?;
+
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let compact_store = create_compact_store(&project_root)?;
+        let system_msg = build_compact_system_msg(&entries, &source_range, &overlay);
         let start_seq = source_range.start_seq;
         let end_seq = source_range.end_seq_exclusive;
 
         self.compact = Some(InteractiveCompactState {
             source_range,
             evidence_pack_ref,
+            compact_store,
             messages: vec![system_msg],
             current_content: String::new(),
         });
@@ -287,16 +286,14 @@ impl Agent {
     }
 
     /// Send user input to the compact session as a modification request.
-    /// Returns the LLM's updated compressed content.
     pub async fn run_interactive_compact_turn(
         &mut self,
         input: &str,
-    ) -> Result<InteractiveCompactOutput> {
+    ) -> Result<interactive::InteractiveCompactOutput> {
         let state = self.compact.as_mut().ok_or_else(|| {
             crate::error::BytodeError::Session("no active interactive compact session".into())
         })?;
 
-        // The compact session has no project tools — only text responses.
         use crate::llm;
         state.messages.push(llm::build_user_message(&format!(
             "Modification request:\n{input}\n\nRespond with the updated compressed content."
@@ -318,11 +315,10 @@ impl Agent {
             .push(llm::build_assistant_text_message(&content));
         state.current_content = content.clone();
 
-        Ok(InteractiveCompactOutput { content })
+        Ok(interactive::InteractiveCompactOutput { content })
     }
 
-    /// Commit the latest compact session content to the main session log and
-    /// return to `Normal` mode.
+    /// Commit the latest compact session content to the main session log.
     pub fn commit_interactive_compact(&mut self) -> Result<InteractiveCompactEntry> {
         let state = self.compact.take().ok_or_else(|| {
             crate::error::BytodeError::Session("no active interactive compact session".into())
@@ -334,33 +330,14 @@ impl Agent {
             ));
         }
 
-        let start_seq = state.source_range.start_seq;
-        let end_seq = state.source_range.end_seq_exclusive;
-        let ic_entry = InteractiveCompactEntry {
-            source_range: state.source_range,
-            compact_session_id: self.runtime.session_id().clone(),
-            outcome: InteractiveCompactOutcome::Committed,
-            result: Some(InteractiveCompactResult {
-                content: state.current_content,
-                evidence_pack_ref: state.evidence_pack_ref,
-            }),
-            operation_digest: format!(
-                "InteractiveCompact committed: replaced seq {start_seq}-{end_seq}"
-            ),
-        };
-
-        let meta = self.runtime.store_next_meta();
-        let entry = SessionEntry {
-            meta,
-            kind: SessionEntryKind::InteractiveCompact(ic_entry.clone()),
-        };
-        self.runtime.commit_entry(entry)?;
+        let ic_entry = commit_to_main_store(&mut self.runtime.store_mut(), &state)?;
 
         self.mode = AgentMode::Normal;
-
-        let start_seq = ic_entry.source_range.start_seq;
-        let end_seq = ic_entry.source_range.end_seq_exclusive;
-        tracing::info!(start_seq, end_seq, "interactive compact committed");
+        tracing::info!(
+            start_seq = ic_entry.source_range.start_seq,
+            end_seq = ic_entry.source_range.end_seq_exclusive,
+            "interactive compact committed"
+        );
         Ok(ic_entry)
     }
 
@@ -380,43 +357,6 @@ impl Agent {
     /// Whether the agent is currently in an interactive compact session.
     pub fn is_in_interactive_compact(&self) -> bool {
         self.mode == AgentMode::InteractiveCompact
-    }
-
-    /// Generate an evidence pack artifact for the given source range.
-    fn generate_evidence_pack(
-        &mut self,
-        entries: &[SessionEntry],
-        source_range: &EntrySpan,
-    ) -> Result<ArtifactRef> {
-        let mut excerpts: Vec<Value> = Vec::new();
-        for entry in entries {
-            if entry.meta.seq < source_range.start_seq
-                || entry.meta.seq >= source_range.end_seq_exclusive
-            {
-                continue;
-            }
-            let (kind_str, excerpt) = entry_excerpt(entry);
-            excerpts.push(serde_json::json!({
-                "seq": entry.meta.seq,
-                "kind": kind_str,
-                "excerpt": excerpt,
-            }));
-        }
-
-        let pack = serde_json::json!({
-            "source_session_id": self.runtime.session_id().as_str(),
-            "source_range": {
-                "start_seq": source_range.start_seq,
-                "end_seq_exclusive": source_range.end_seq_exclusive,
-            },
-            "entry_count": excerpts.len(),
-            "entries": excerpts,
-        });
-
-        let pack_str = serde_json::to_string_pretty(&pack).unwrap_or_default();
-        let meta = self.runtime.store_next_meta();
-        self.runtime
-            .write_artifact(&meta, ArtifactKind::CompactArchive, &pack_str)
     }
 
     async fn execute_tool(&self, call: &ToolCall) -> Result<ToolResult> {
@@ -539,140 +479,6 @@ impl Agent {
 #[derive(Debug, Clone)]
 pub enum AgentOutput {
     Text(String),
-}
-
-/// Output from one turn of an interactive compact session.
-#[derive(Debug, Clone)]
-pub struct InteractiveCompactOutput {
-    pub content: String,
-}
-
-// Interactive compact helpers ------------------------------------------------
-
-/// Select a contiguous source range for interactive compact. Returns `None`
-/// when all old entries are already covered by committed compacts or when the
-/// only remaining entries are within the recent-turn window.
-fn select_source_range(
-    entries: &[SessionEntry],
-    policy: &crate::session::MicroCompactPolicy,
-) -> Option<EntrySpan> {
-    if entries.is_empty() {
-        return None;
-    }
-
-    let mut covered_until: u64 = entries.first().map(|e| e.meta.seq).unwrap_or(0);
-    for entry in entries {
-        if let SessionEntryKind::InteractiveCompact(ic) = &entry.kind {
-            if matches!(ic.outcome, InteractiveCompactOutcome::Committed) {
-                covered_until = covered_until.max(ic.source_range.end_seq_exclusive);
-            }
-        }
-    }
-
-    let cutoff_idx = preserve_cutoff(entries, policy);
-    let cutoff_seq = if cutoff_idx < entries.len() {
-        entries[cutoff_idx].meta.seq
-    } else {
-        entries
-            .last()
-            .map(|e| e.meta.seq.saturating_add(1))
-            .unwrap_or(0)
-    };
-
-    if covered_until >= cutoff_seq {
-        return None;
-    }
-
-    Some(EntrySpan {
-        start_seq: covered_until,
-        end_seq_exclusive: cutoff_seq,
-    })
-}
-
-fn entry_excerpt(entry: &SessionEntry) -> (&'static str, String) {
-    match &entry.kind {
-        SessionEntryKind::UserMessage(u) => ("UserMessage", truncate_str(&u.content, 400)),
-        SessionEntryKind::AssistantMessage(a) => {
-            ("AssistantMessage", truncate_str(&a.content, 400))
-        }
-        SessionEntryKind::ToolCall(c) => (
-            "ToolCall",
-            format!(
-                "{} {}",
-                c.tool_name,
-                truncate_str(
-                    &c.inline_args
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_default(),
-                    200
-                )
-            ),
-        ),
-        SessionEntryKind::ToolResult(r) => (
-            "ToolResult",
-            r.preview
-                .clone()
-                .unwrap_or_else(|| truncate_str(r.inline_content.as_deref().unwrap_or(""), 300)),
-        ),
-        SessionEntryKind::MicroCompact(mc) => ("MicroCompact", mc.operation_digest.clone()),
-        SessionEntryKind::InteractiveCompact(ic) => {
-            ("InteractiveCompact", ic.operation_digest.clone())
-        }
-    }
-}
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max_chars).collect();
-        out.push_str("...");
-        out
-    }
-}
-
-fn build_compact_system_msg(
-    entries: &[SessionEntry],
-    source_range: &EntrySpan,
-) -> async_openai::types::ChatCompletionRequestMessage {
-    let mut evidence = String::new();
-    for entry in entries {
-        if entry.meta.seq < source_range.start_seq
-            || entry.meta.seq >= source_range.end_seq_exclusive
-        {
-            continue;
-        }
-        let (kind, excerpt) = entry_excerpt(entry);
-        evidence.push_str(&format!(
-            "  [seq {}] {}: {}\n",
-            entry.meta.seq, kind, excerpt
-        ));
-    }
-
-    let prompt = format!(
-        r#"You are compressing a range of conversation history. Produce a concise
-replacement that preserves all essential facts, decisions, constraints, and
-unfinished items from the source range. Rules:
-
-1. Do NOT fabricate facts not present in the evidence.
-2. Do NOT judge task completion or declare work finished.
-3. Retain: user requests, tool results, file modifications, diagnostics,
-   error messages, and unfinished items.
-4. Omit: redundant tool output, repeated search results, verbose diffs
-   when the outcome is already stated.
-5. Output ONLY the compressed content — no preamble, no commentary.
-
-Source range: seq {}-{}
-
-Evidence:
-{}"#,
-        source_range.start_seq,
-        source_range.end_seq_exclusive.saturating_sub(1),
-        evidence,
-    );
-
-    crate::llm::build_system_message(&prompt)
 }
 
 fn format_args(tool_name: &str, args: &serde_json::Value) -> String {

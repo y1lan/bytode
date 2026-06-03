@@ -38,6 +38,8 @@ pub struct SessionStore {
 impl SessionStore {
     /// Open (creating if needed) the session at `session_root`. `next_seq` is
     /// recovered by replaying the log so resumed sessions keep monotonic seqs.
+    /// Runtime fields (`last_model_request_at`, etc.) are restored from any
+    /// existing `state.json` so they survive restarts.
     pub fn open(session_id: SessionId, session_root: PathBuf) -> Result<Self> {
         fs::ensure_session_tree(&session_root)?;
         let log_path = session_root.join("events").join("log.jsonl");
@@ -52,15 +54,23 @@ impl SessionStore {
             .map(|m| m + 1)
             .unwrap_or(0);
 
+        // Restore runtime fields from a prior run so they survive restarts.
+        let prior = read_existing_state(&session_root);
+
         let state = SessionState {
             session_id,
             next_seq,
             session_root: session_root.clone(),
             log_path: log_path.clone(),
             artifact_dir,
-            last_model_request_at: None,
-            last_micro_compact_seq: None,
-            turns_since_last_micro_compact: 0,
+            last_model_request_at: prior
+                .as_ref()
+                .and_then(|s| s.last_model_request_at),
+            last_micro_compact_seq: prior.as_ref().and_then(|s| s.last_micro_compact_seq),
+            turns_since_last_micro_compact: prior
+                .as_ref()
+                .map(|s| s.turns_since_last_micro_compact)
+                .unwrap_or(0),
         };
         let writer = SessionLogWriter::open(&log_path)?;
         let artifacts = ArtifactStore::new(session_root);
@@ -144,4 +154,10 @@ fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn read_existing_state(session_root: &std::path::Path) -> Option<SessionState> {
+    let path = session_root.join("state.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
 }

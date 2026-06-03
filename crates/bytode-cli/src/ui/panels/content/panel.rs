@@ -189,6 +189,24 @@ impl ContentPanel {
         self.scroll = ScrollMode::Auto;
     }
 
+    /// Save the current entries and clear the panel. Used when switching to
+    /// InteractiveCompact mode so compact messages don't mix with main session
+    /// messages. Call `restore_entries` to switch back.
+    pub fn save_and_clear(&mut self) -> Vec<HistoryEntry> {
+        let saved = std::mem::take(&mut self.entries);
+        self.stream_buffer.clear();
+        self.streaming_visible.clear();
+        self.scroll = ScrollMode::Auto;
+        saved
+    }
+
+    pub fn restore_entries(&mut self, saved: Vec<HistoryEntry>) {
+        self.entries = saved;
+        self.stream_buffer.clear();
+        self.streaming_visible.clear();
+        self.scroll = ScrollMode::Auto;
+    }
+
     pub fn scroll_to_bottom(&mut self) {
         self.scroll = ScrollMode::Auto;
     }

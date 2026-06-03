@@ -14,8 +14,8 @@ use crate::session::model::{
     ArtifactKind, ArtifactRef, EntryId, EntryMeta, MicroCompactResult, SessionEntry,
     SessionEntryKind, SessionId, ToolCallEntry, ToolResultEntry, ToolStatus,
 };
+use crate::session::store::fs::{record_inline_limit, ArtifactStore};
 use crate::session::store::SessionStore;
-use crate::session::store::fs::record_inline_limit;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -66,6 +66,14 @@ impl SessionRuntime {
     /// Commit a fully-built entry (used by interactive compact).
     pub fn commit_entry(&mut self, entry: SessionEntry) -> Result<EntryId> {
         self.store.commit(entry)
+    }
+
+    pub fn artifact_store(&self) -> &ArtifactStore {
+        self.store.artifacts()
+    }
+
+    pub fn store_mut(&mut self) -> &mut SessionStore {
+        &mut self.store
     }
 
     // ------------------------------------------------------------------
@@ -255,11 +263,7 @@ impl SessionRuntime {
     pub fn rendered_context_entries(&self) -> Result<Vec<RenderedEntry>> {
         let entries = self.store.replay_entries()?;
         let overlay = CompactOverlay::from_entries(&entries);
-        Ok(render_context_entries(
-            &entries,
-            &overlay,
-            self.store.artifacts(),
-        ))
+        render_context_entries(&entries, &overlay, self.store.artifacts())
     }
 
     // ------------------------------------------------------------------

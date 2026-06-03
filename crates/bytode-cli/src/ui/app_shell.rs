@@ -19,6 +19,7 @@ pub struct AppShell {
     runtime: RuntimeSnapshot,
     sidebar_visible: bool,
     next_turn_id: TurnId,
+    saved_main_entries: Option<Vec<HistoryEntry>>,
 }
 
 impl AppShell {
@@ -66,6 +67,7 @@ impl AppShell {
             runtime,
             sidebar_visible: false,
             next_turn_id: 1,
+            saved_main_entries: None,
         };
         shell.normalize_focus();
         shell
@@ -252,8 +254,10 @@ impl AppShell {
             }
             SlashCommand::Compact => match agent.start_interactive_compact() {
                 Ok(()) => {
+                    self.saved_main_entries =
+                        Some(self.content_panel_mut().save_and_clear());
                     self.content_panel_mut().push_assistant(
-                        "Interactive compact started. Send modification requests, then /commit or /abort.".into(),
+                        "Compact session — send modifications, then /commit or /abort.".into(),
                     );
                     self.show_notice("compact — /commit or /abort".into());
                 }
@@ -270,6 +274,9 @@ impl AppShell {
                 } else {
                     match agent.commit_interactive_compact() {
                         Ok(entry) => {
+                            if let Some(saved) = self.saved_main_entries.take() {
+                                self.content_panel_mut().restore_entries(saved);
+                            }
                             self.content_panel_mut().push_assistant(format!(
                                 "Compact committed. {}",
                                 entry.operation_digest
@@ -291,6 +298,9 @@ impl AppShell {
                 } else {
                     match agent.abort_interactive_compact() {
                         Ok(()) => {
+                            if let Some(saved) = self.saved_main_entries.take() {
+                                self.content_panel_mut().restore_entries(saved);
+                            }
                             self.content_panel_mut()
                                 .push_assistant("Compact aborted.".into());
                             self.show_notice(String::new());

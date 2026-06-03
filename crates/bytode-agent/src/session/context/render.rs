@@ -1,8 +1,12 @@
 //! Renders `SessionEntry` + `CompactOverlay` into a flat view the ContextBuilder
-//! turns into chat messages. Compacted and record-time-archived tool results are
-//! shown as stable preview blocks; missing or corrupt artifacts produce explicit
-//! error previews. This module never panics.
+//! turns into chat messages.
+//!
+//! Compacted and record-time-archived tool results are shown as stable preview
+//! blocks; missing or corrupt artifacts produce explicit error previews.
+//! Overlapping committed interactive-compact ranges return a diagnostic error.
+//! This module never panics on data issues.
 
+use crate::error::{BytodeError, Result};
 use crate::session::compact::{CompactOverlay, kind_for_tool};
 use crate::session::model::{
     ArtifactKind, ArtifactRef, EntryId, EntrySpan, InteractiveCompactOutcome, SessionEntry,
@@ -33,12 +37,13 @@ pub enum RenderedEntry {
 ///
 /// Committed `InteractiveCompact` entries replace their source range with
 /// `result.content` so the old entries are excluded from context.
+/// Overlapping committed ranges return an error.
 pub fn render_context_entries(
     entries: &[SessionEntry],
     overlay: &CompactOverlay,
     artifacts: &ArtifactStore,
-) -> Vec<RenderedEntry> {
-    let replacements = collect_committed_replacements(entries);
+) -> Result<Vec<RenderedEntry>> {
+    let replacements = collect_committed_replacements(entries)?;
     let tool_names = tool_name_index(entries);
     let mut out = Vec::new();
     let mut skip_until: Option<u64> = None;
@@ -96,13 +101,15 @@ pub fn render_context_entries(
         }
     }
 
-    out
+    Ok(out)
 }
 
 /// Collect committed InteractiveCompact source ranges and their replacement
-/// content. Sorted by start_seq. Panics if overlapping ranges are detected
-/// (this is a data-integrity invariant).
-fn collect_committed_replacements(entries: &[SessionEntry]) -> Vec<(EntrySpan, String)> {
+/// content. Sorted by start_seq. Returns an error when overlapping ranges are
+/// detected.
+fn collect_committed_replacements(
+    entries: &[SessionEntry],
+) -> Result<Vec<(EntrySpan, String)>> {
     let mut result: Vec<(EntrySpan, String)> = Vec::new();
     for entry in entries {
         if let SessionEntryKind::InteractiveCompact(ic) = &entry.kind {
@@ -116,31 +123,20 @@ fn collect_committed_replacements(entries: &[SessionEntry]) -> Vec<(EntrySpan, S
     // Sort by start_seq for deterministic rendering.
     result.sort_by(|a, b| a.0.start_seq.cmp(&b.0.start_seq));
 
-    // Detect overlaps.
+    // Detect overlaps — return a diagnostic error, not a preview.
     for i in 1..result.len() {
         if result[i].0.start_seq < result[i - 1].0.end_seq_exclusive {
-            // Log the overlap but don't panic — return an error preview instead.
-            // The renderer never panics.
-            return vec![(
-                EntrySpan {
-                    start_seq: result[i - 1].0.start_seq,
-                    end_seq_exclusive: result[i]
-                        .0
-                        .end_seq_exclusive
-                        .max(result[i - 1].0.end_seq_exclusive),
-                },
-                format!(
-                    "[interactive compact error]\noverlapping committed ranges: seq {}-{} and {}-{}",
-                    result[i - 1].0.start_seq,
-                    result[i - 1].0.end_seq_exclusive,
-                    result[i].0.start_seq,
-                    result[i].0.end_seq_exclusive,
-                ),
-            )];
+            return Err(BytodeError::Session(format!(
+                "overlapping committed interactive compact ranges: seq {}-{} and {}-{}",
+                result[i - 1].0.start_seq,
+                result[i - 1].0.end_seq_exclusive,
+                result[i].0.start_seq,
+                result[i].0.end_seq_exclusive,
+            )));
         }
     }
 
-    result
+    Ok(result)
 }
 
 fn render_tool_result(

@@ -140,7 +140,7 @@ fn compacted_entry_renders_as_preview() {
 
     let entries = store.replay_entries().unwrap();
     let overlay = CompactOverlay::from_entries(&entries);
-    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts()).unwrap();
 
     let has_preview = rendered.iter().any(|r| {
         matches!(r, RenderedEntry::ToolResult { content, .. }
@@ -430,7 +430,7 @@ fn interactive_compact_context_replaces_source_range() {
 
     let entries = store.replay_entries().unwrap();
     let overlay = CompactOverlay::from_entries(&entries);
-    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts()).unwrap();
 
     assert!(matches!(&rendered[0], RenderedEntry::Assistant(s) if s == "REPLACED"));
     assert!(matches!(&rendered[1], RenderedEntry::User(s) if s == "recent message"));
@@ -506,7 +506,7 @@ fn interactive_compact_tail_preserves_micro_compact() {
 
     let entries = store.replay_entries().unwrap();
     let overlay = CompactOverlay::from_entries(&entries);
-    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts()).unwrap();
 
     assert!(matches!(&rendered[0], RenderedEntry::Assistant(s) if s == "REPLACED_USER"));
     assert!(matches!(&rendered[1], RenderedEntry::ToolCall { name, .. } if name == "web_search"));
@@ -517,7 +517,7 @@ fn interactive_compact_tail_preserves_micro_compact() {
 }
 
 #[test]
-fn interactive_compact_overlap_produces_error_preview() {
+fn interactive_compact_overlap_returns_error() {
     let mut store =
         SessionStore::open(SessionId("ic-overlap".into()), temp_root("ic-overlap")).unwrap();
 
@@ -555,12 +555,9 @@ fn interactive_compact_overlap_produces_error_preview() {
 
     let entries = store.replay_entries().unwrap();
     let overlay = CompactOverlay::from_entries(&entries);
-    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
-
-    let has_error = rendered.iter().any(|r| {
-        matches!(r, RenderedEntry::Assistant(s) if s.starts_with("[interactive compact error]"))
-    });
-    assert!(has_error);
+    // Overlapping committed ranges must return an error.
+    let result = render_context_entries(&entries, &overlay, store.artifacts());
+    assert!(result.is_err());
 }
 
 #[test]
@@ -595,7 +592,7 @@ fn interactive_compact_abort_does_not_affect_context() {
 
     let entries = store.replay_entries().unwrap();
     let overlay = CompactOverlay::from_entries(&entries);
-    let rendered = render_context_entries(&entries, &overlay, store.artifacts());
+    let rendered = render_context_entries(&entries, &overlay, store.artifacts()).unwrap();
 
     assert!(matches!(&rendered[0], RenderedEntry::User(s) if s == "msg"));
 }

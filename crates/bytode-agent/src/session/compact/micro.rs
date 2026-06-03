@@ -1,4 +1,4 @@
-//! Deterministic `/compact micro` (execution) and its pre-flight estimate.
+//! Deterministic micro compact execution and its pre-flight estimate.
 //!
 //! Safety invariants (enforced here and covered by tests):
 //! - never touches `UserMessage` entries (user words / corrections / acceptance)
@@ -6,7 +6,8 @@
 //! - never summarizes task facts, never judges task completion, never calls an LLM
 //! - only archives old, oversized runtime noise (tool output, stdout/stderr,
 //!   file snapshots, diffs, diagnostics, search results)
-//! - manual invocations are removed; only automatic triggers are permitted
+//! - triggered automatically (ContextPressure / ColdResume / TurnInterval /
+//!   BloatPressure); no manual invocation exposed to users
 
 use crate::error::Result;
 use crate::session::compact::{

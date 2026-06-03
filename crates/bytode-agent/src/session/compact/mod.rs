@@ -10,6 +10,7 @@
 //! suffix. Automatic triggering therefore combines pressure, cold-resume,
 //! periodic turn interval, and bloat heuristics.
 
+pub mod interactive;
 pub mod micro;
 pub mod overlay;
 
