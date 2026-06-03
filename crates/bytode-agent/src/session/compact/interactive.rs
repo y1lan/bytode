@@ -117,6 +117,25 @@ pub fn generate_evidence_pack(
                 .collect();
             item["artifact_refs"] = serde_json::Value::Array(refs);
         }
+        // Record overlay information when this entry was micro-compacted.
+        if let Some(view) = overlay.view_for(&entry.meta.id) {
+            item["overlay_compact_entry_id"] =
+                serde_json::Value::String(view.compact_entry_id.0.clone());
+            if !view.artifact_refs.is_empty() {
+                let ov_refs: Vec<Value> = view
+                    .artifact_refs
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "relative_path": a.relative_path.display().to_string(),
+                            "sha256": a.sha256,
+                            "byte_len": a.byte_len,
+                        })
+                    })
+                    .collect();
+                item["overlay_artifact_refs"] = serde_json::Value::Array(ov_refs);
+            }
+        }
         // Per-entry checksum for integrity tracking.
         item["excerpt_sha256"] = serde_json::Value::String(sha256_hex(excerpt.as_bytes()));
         ev_entries.push(item);

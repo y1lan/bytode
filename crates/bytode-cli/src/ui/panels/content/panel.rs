@@ -121,7 +121,12 @@ impl ContentPanel {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, ctx: &RenderContext<'_>) {
-        let block = panel_block("Conversation", ctx.focused == Some(self.id()));
+        let title = if ctx.runtime.status.mode == "compact" {
+            "Interactive Compact"
+        } else {
+            "Conversation"
+        };
+        let block = panel_block(title, ctx.focused == Some(self.id()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 

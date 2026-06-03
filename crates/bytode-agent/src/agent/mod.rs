@@ -286,6 +286,8 @@ impl Agent {
     }
 
     /// Send user input to the compact session as a modification request.
+    /// Both the user input and the assistant response are appended to the
+    /// compact session's own `log.jsonl`.
     pub async fn run_interactive_compact_turn(
         &mut self,
         input: &str,
@@ -293,6 +295,19 @@ impl Agent {
         let state = self.compact.as_mut().ok_or_else(|| {
             crate::error::BytodeError::Session("no active interactive compact session".into())
         })?;
+
+        // Append user message to the compact session log.
+        {
+            let meta = state.compact_store.next_meta();
+            state.compact_store.commit(crate::session::SessionEntry {
+                meta,
+                kind: crate::session::SessionEntryKind::UserMessage(
+                    crate::session::UserMessageEntry {
+                        content: input.to_string(),
+                    },
+                ),
+            })?;
+        }
 
         use crate::llm;
         state.messages.push(llm::build_user_message(&format!(
@@ -314,6 +329,19 @@ impl Agent {
             .messages
             .push(llm::build_assistant_text_message(&content));
         state.current_content = content.clone();
+
+        // Append assistant response to the compact session log.
+        {
+            let meta = state.compact_store.next_meta();
+            state.compact_store.commit(crate::session::SessionEntry {
+                meta,
+                kind: crate::session::SessionEntryKind::AssistantMessage(
+                    crate::session::AssistantMessageEntry {
+                        content: content.clone(),
+                    },
+                ),
+            })?;
+        }
 
         Ok(interactive::InteractiveCompactOutput { content })
     }
