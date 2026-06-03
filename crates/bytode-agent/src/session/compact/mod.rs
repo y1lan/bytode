@@ -202,7 +202,7 @@ fn estimate_preview_chars(content: &str) -> usize {
 /// Index below which entries are eligible for compaction. Entries at or after
 /// this index are preserved because they fall within the recent-entry window
 /// or the recent-turn window (whichever preserves more).
-fn preserve_cutoff(
+pub(crate) fn preserve_cutoff(
     entries: &[crate::session::model::SessionEntry],
     policy: &MicroCompactPolicy,
 ) -> usize {

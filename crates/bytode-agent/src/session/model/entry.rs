@@ -52,6 +52,7 @@ pub enum SessionEntryKind {
     ToolCall(ToolCallEntry),
     ToolResult(ToolResultEntry),
     MicroCompact(MicroCompactEntry),
+    InteractiveCompact(InteractiveCompactEntry),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +110,36 @@ pub struct MicroCompactResult {
     pub compacted_entry_ids: Vec<EntryId>,
     pub saved_bytes_estimate: usize,
     pub operation_digest: String,
+}
+
+/// Half-open seq interval referencing a contiguous range of log entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntrySpan {
+    pub start_seq: u64,
+    pub end_seq_exclusive: u64,
+}
+
+/// Record of an interactive compact session. Written to the main session log
+/// on `/commit` (and optionally on `/abort`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractiveCompactEntry {
+    pub source_range: EntrySpan,
+    pub compact_session_id: SessionId,
+    pub outcome: InteractiveCompactOutcome,
+    pub result: Option<InteractiveCompactResult>,
+    pub operation_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InteractiveCompactOutcome {
+    Committed,
+    Aborted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractiveCompactResult {
+    pub content: String,
+    pub evidence_pack_ref: ArtifactRef,
 }
 
 /// Derived view describing how a compacted entry should appear in context.

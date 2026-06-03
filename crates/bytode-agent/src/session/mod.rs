@@ -12,8 +12,9 @@ pub use compact::{CompactOverlay, MicroCompactPolicy};
 pub use context::{RenderedEntry, render_context_entries};
 pub use model::{
     ArtifactId, ArtifactKind, ArtifactRef, AssistantMessageEntry, CompactedEntryView, EntryId,
-    EntryMeta, MicroCompactEntry, MicroCompactResult, SessionEntry, SessionEntryKind, SessionId,
-    ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
+    EntryMeta, EntrySpan, InteractiveCompactEntry, InteractiveCompactOutcome,
+    InteractiveCompactResult, MicroCompactEntry, MicroCompactResult, SessionEntry,
+    SessionEntryKind, SessionId, ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
 };
 pub use runtime::SessionRuntime;
 pub use store::fs::{
