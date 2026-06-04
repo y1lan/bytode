@@ -163,11 +163,13 @@ pub fn generate_evidence_pack(
     artifact_store.write(&meta, ArtifactKind::CompactArchive, &pack_str)
 }
 
-/// Create an independent compact session with its own directory and log.
+/// Create an independent compact session with its own directory and log. The
+/// session lives under `sessions/.compact/` so it never appears in the
+/// per-project session picker (which only lists `project-*` directories).
 pub fn create_compact_store(project_root: &std::path::Path) -> Result<SessionStore> {
     let root = sessions_root()?;
     let compact_id = new_session_id(project_root, now_secs() as u64);
-    let compact_root = root.join(compact_id.as_str());
+    let compact_root = root.join(".compact").join(compact_id.as_str());
     SessionStore::open(compact_id, compact_root)
 }
 
