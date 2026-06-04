@@ -9,8 +9,9 @@ use crate::ui::events::{
 };
 use crate::ui::panels::{BG, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, panel_block};
 use ratatui::prelude::*;
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use std::cell::{Cell, RefCell};
+use unicode_width::UnicodeWidthChar;
 
 pub struct ContentPanel {
     entries: Vec<HistoryEntry>,
@@ -139,7 +140,6 @@ impl ContentPanel {
 
         let paragraph = Paragraph::new(lines)
             .style(Style::default().fg(TXT).bg(BG))
-            .wrap(Wrap { trim: false })
             .scroll((
                 self.scroll_offset(self.last_total_lines.get(), visible) as u16,
                 0,
@@ -276,7 +276,7 @@ impl ContentPanel {
                 width,
             ));
         }
-        (all, hits)
+        wrap_lines_and_remap_hits(all, hits, width)
     }
 
     fn scroll_offset(&self, total_visual_lines: usize, visible: usize) -> usize {
@@ -564,4 +564,119 @@ mod tests {
         };
         assert!(!part.collapsed);
     }
+
+    #[test]
+    fn wrapped_text_keeps_tool_hit_regions_aligned() {
+        let mut panel = ContentPanel::new(Vec::new());
+        panel.entries.push(HistoryEntry::Assistant(parse_assistant_message(
+            "This is a very long compact summary line that should wrap across multiple visual rows before the tool block appears.\n\n  ⟳ read_file(src/main.rs)\n   1 | fn main() {}\n   2 | println!(\"hi\");\n   3 | let x = 1;\n   4 | let y = 2;\n   5 | let z = 3;\n   6 | done();\n   7 | extra();\n",
+            stream_tool_state(None),
+        )));
+
+        let exec_state = ExecState::Idle;
+        let (lines, hits) = panel.collect_lines(24, &exec_state);
+        panel.last_total_lines.set(lines.len());
+        panel.last_visible_lines.set(lines.len());
+        let hit_line = hits[0].line;
+        panel.last_hit_regions.replace(hits);
+
+        let area = Rect::new(0, 0, 24, 20);
+        let result = panel.handle_mouse(
+            MouseAction::Down {
+                button: MouseButton::Left,
+                column: 2,
+                row: 1 + hit_line as u16,
+            },
+            area,
+            &idle_panel_ctx(),
+        );
+
+        assert!(matches!(result, DispatchResult::Consumed(_)));
+        let HistoryEntry::Assistant(message) = &panel.entries[0] else {
+            panic!("expected assistant entry");
+        };
+        let AssistantPart::Tool(part) = &message.parts[1] else {
+            panic!("expected tool part");
+        };
+        assert!(!part.collapsed);
+    }
+}
+
+fn wrap_lines_and_remap_hits(
+    lines: Vec<Line<'static>>,
+    hits: Vec<ContentHitRegion>,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<ContentHitRegion>) {
+    if width == 0 {
+        return (lines, hits);
+    }
+
+    let mut wrapped = Vec::new();
+    let mut line_starts = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        line_starts.push(wrapped.len());
+        wrapped.extend(wrap_line(line, width));
+    }
+
+    let remapped_hits = hits
+        .into_iter()
+        .map(|mut hit| {
+            hit.line = line_starts.get(hit.line).copied().unwrap_or(hit.line);
+            hit
+        })
+        .collect();
+
+    (wrapped, remapped_hits)
+}
+
+fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 || line.width() <= width {
+        return vec![line];
+    }
+
+    let mut out = Vec::new();
+    let mut current = Vec::<Span<'static>>::new();
+    let mut current_width = 0usize;
+
+    for span in line.spans {
+        let style = span.style;
+        let mut chunk = String::new();
+        let mut chunk_width = 0usize;
+
+        for ch in span.content.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width + chunk_width + ch_width > width && current_width + chunk_width > 0 {
+                if !chunk.is_empty() {
+                    current.push(Span::styled(std::mem::take(&mut chunk), style));
+                    chunk_width = 0;
+                }
+                out.push(Line::from(std::mem::take(&mut current)));
+                current_width = 0;
+            }
+
+            chunk.push(ch);
+            chunk_width += ch_width;
+
+            if current_width + chunk_width >= width && current_width + chunk_width > 0 {
+                current.push(Span::styled(std::mem::take(&mut chunk), style));
+                out.push(Line::from(std::mem::take(&mut current)));
+                current_width = 0;
+                chunk_width = 0;
+            }
+        }
+
+        if !chunk.is_empty() {
+            current.push(Span::styled(chunk, style));
+            current_width += chunk_width;
+        }
+    }
+
+    if current.is_empty() {
+        out.push(Line::default());
+    } else {
+        out.push(Line::from(current));
+    }
+
+    out
 }
