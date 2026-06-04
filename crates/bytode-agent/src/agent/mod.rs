@@ -408,7 +408,10 @@ impl Agent {
 
         let source_range =
             select_source_range(&entries, self.runtime.policy()).ok_or_else(|| {
-                crate::error::BytodeError::Session("no eligible source range to compact".into())
+                crate::error::BytodeError::Session(
+                    "当前对话尚短，暂无可压缩的历史：压缩只作用于超出最近窗口的旧对话，请先积累更多轮次后再试。"
+                        .into(),
+                )
             })?;
 
         let evidence_pack_ref = generate_evidence_pack(
