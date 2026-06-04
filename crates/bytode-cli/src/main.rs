@@ -47,13 +47,6 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "bytode=info".into()),
-        )
-        .init();
-
     let mut cli = Cli::parse();
     let api_key = cli
         .api_key
@@ -197,6 +190,12 @@ async fn main() -> Result<()> {
         agent::session::default_session_id(&project_root)
     };
     let session_root = agent::session::session_root(&session_id)?;
+
+    // Route tracing logs to a file inside the session directory. This is a TUI
+    // program — nothing diagnostic may reach the terminal. The worker guard
+    // must outlive the program, so it is held until the end of `main`.
+    let _log_guard = init_session_logging(&session_root)?;
+
     let mut agent = Agent::new(
         llm,
         registry,
@@ -257,6 +256,28 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Initialize tracing to write to `<session_root>/bytode.log`. Returns the
+/// non-blocking worker guard, which must be kept alive for logs to flush.
+fn init_session_logging(
+    session_root: &Path,
+) -> Result<tracing_appender::non_blocking::WorkerGuard> {
+    std::fs::create_dir_all(session_root)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(session_root.join("bytode.log"))?;
+    let (writer, guard) = tracing_appender::non_blocking(file);
+    tracing_subscriber::fmt()
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "bytode=info".into()),
+        )
+        .init();
+    Ok(guard)
+}
+
 /// Present the startup session picker on the terminal. Lists existing sessions
 /// for this project (most recent first) plus a "new session" option. Empty
 /// input selects the most recent session; an empty list creates a new one.
@@ -290,9 +311,9 @@ fn pick_session(project_root: &Path) -> Result<agent::session::SessionId> {
         return Ok(sessions[0].session_id.clone());
     }
 
-    let n: usize = choice.parse().map_err(|_| {
-        error::BytodeError::Session(format!("invalid session choice: {choice}"))
-    })?;
+    let n: usize = choice
+        .parse()
+        .map_err(|_| error::BytodeError::Session(format!("invalid session choice: {choice}")))?;
     if n == 0 {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
