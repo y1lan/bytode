@@ -466,9 +466,16 @@ impl Agent {
         }
 
         use crate::llm;
-        state.messages.push(llm::build_user_message(&format!(
-            "Modification request:\n{input}\n\nRespond with the updated compressed content."
-        )));
+        // First turn (no summary yet) generates the initial summary from the
+        // evidence in the system prompt; later turns are modification requests.
+        let prompt = if state.current_content.is_empty() {
+            "Generate the initial compressed summary of the source range.".to_string()
+        } else {
+            format!(
+                "Modification request:\n{input}\n\nRespond with the updated compressed content."
+            )
+        };
+        state.messages.push(llm::build_user_message(&prompt));
 
         let response = self.llm.chat(state.messages.clone(), vec![]).await?;
         let content = match response {

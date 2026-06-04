@@ -202,8 +202,9 @@ impl AppShell {
         self.input_panel_mut().set_notice("interrupt requested");
     }
 
-    pub fn apply_slash_command(&mut self, command: &str, agent: &mut Agent) {
+    pub fn apply_slash_command(&mut self, command: &str, agent: &mut Agent) -> Vec<Effect> {
         self.content_panel_mut().push_user(command.to_string());
+        let mut effects: Vec<Effect> = Vec::new();
         match parse_slash_command(command) {
             SlashCommand::Exit => {}
             SlashCommand::Model(None) => {
@@ -242,7 +243,7 @@ impl AppShell {
                         self.content_panel_mut()
                             .push_error(format!("Unknown /plan argument: {other}"));
                         self.input_panel_mut().clear_notice();
-                        return;
+                        return Vec::new();
                     }
                 };
                 agent.set_mode(mode);
@@ -256,9 +257,17 @@ impl AppShell {
                 Ok(()) => {
                     self.saved_main_entries = Some(self.content_panel_mut().save_and_clear());
                     self.content_panel_mut().push_assistant(
-                        "Compact session — send modifications, then /commit or /abort.".into(),
+                        "Compact session — generating initial summary, then edit and /commit or /abort."
+                            .into(),
                     );
                     self.show_notice("compact — /commit or /abort".into());
+                    // Auto-generate the initial summary as a compact turn so the
+                    // user has content to review before requesting changes.
+                    let turn_id = self.allocate_turn_id();
+                    effects.push(Effect::StartTurn {
+                        turn_id,
+                        input: "Generate the initial compressed summary.".into(),
+                    });
                 }
                 Err(e) => {
                     self.content_panel_mut()
@@ -317,6 +326,7 @@ impl AppShell {
             }
         }
         self.input_panel_mut().clear_notice();
+        effects
     }
 
     pub fn apply_effect(&mut self, effect: &Effect) {

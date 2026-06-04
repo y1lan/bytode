@@ -234,8 +234,24 @@ fn apply_effects(
                 }
             }
             Effect::HandleSlashCommand(command) => {
-                if let Some(agent) = agent_opt.as_mut() {
-                    shell.apply_slash_command(&command, agent);
+                let follow_ups = if let Some(agent) = agent_opt.as_mut() {
+                    shell.apply_slash_command(&command, agent)
+                } else {
+                    Vec::new()
+                };
+                for follow_up in follow_ups {
+                    if let Effect::StartTurn { turn_id, input } = follow_up {
+                        start_turn(
+                            turn_id,
+                            input,
+                            shell,
+                            agent_opt,
+                            rx,
+                            turn_handle,
+                            active_cancel,
+                            last_msg,
+                        );
+                    }
                 }
             }
             Effect::ApproveTool(_)
