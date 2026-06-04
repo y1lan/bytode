@@ -188,11 +188,15 @@ impl AppShell {
         self.content_panel_mut().push_error(message);
     }
 
-    pub fn record_runtime_error(&mut self, message: String) {
+    pub fn record_runtime_error(&mut self, message: String, agent: Option<&mut Agent>) {
         self.exec_state = ExecState::Idle;
         self.runtime.status.task.clear();
         self.content_panel_mut().finalize_stream();
         self.content_panel_mut().push_error(message.clone());
+        // Persist for history restore when the agent is recoverable.
+        if let Some(agent) = agent {
+            let _ = agent.record_system_note(crate::agent::SystemNoteKind::Error, &message);
+        }
         self.show_notice(message);
     }
 
@@ -204,6 +208,8 @@ impl AppShell {
 
     pub fn apply_slash_command(&mut self, command: &str, agent: &mut Agent) -> Vec<Effect> {
         self.content_panel_mut().push_user(command.to_string());
+        // Persist the slash command so it is restored in history after a restart.
+        let _ = agent.record_system_note(crate::agent::SystemNoteKind::SlashCommand, command);
         let mut effects: Vec<Effect> = Vec::new();
         match parse_slash_command(command) {
             SlashCommand::Exit => {}

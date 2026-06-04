@@ -113,7 +113,7 @@ async fn run_inner(
                         rx = None;
                         shell.finish_turn(turn_id);
                         if let Some(error) = maybe_error {
-                            shell.record_runtime_error(error);
+                            shell.record_runtime_error(error, agent_opt.as_mut());
                         }
                         if let Some(pending) = shell.take_pending_input() {
                             start_turn(
@@ -129,7 +129,7 @@ async fn run_inner(
                         }
                     }
                     None => {
-                        shell.record_runtime_error("Turn failed (task panicked)".into());
+                        shell.record_runtime_error("Turn failed (task panicked)".into(), None);
                     }
                 }
             }
@@ -308,7 +308,7 @@ fn start_turn(
     last_msg: &mut Option<std::time::Instant>,
 ) {
     let Some(mut agent) = agent_opt.take() else {
-        shell.record_runtime_error("Agent unavailable".into());
+        shell.record_runtime_error("Agent unavailable".into(), None);
         return;
     };
 
