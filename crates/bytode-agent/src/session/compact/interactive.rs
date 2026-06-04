@@ -6,15 +6,13 @@
 //! called without a ReAct tool-loop — it only produces text responses.
 
 use crate::error::Result;
-use crate::session::compact::{CompactOverlay, MicroCompactPolicy, preserve_cutoff};
+use crate::session::conversation::{CanonicalRecord, CanonicalSpan, canonical_evidence};
 use crate::session::model::{
     ArtifactKind, ArtifactRef, EntryMeta, EntrySpan, InteractiveCompactEntry,
     InteractiveCompactOutcome, InteractiveCompactResult, SessionEntry, SessionEntryKind, SessionId,
 };
 use crate::session::store::SessionStore;
 use crate::session::store::fs::{new_session_id, sessions_root, sha256_hex};
-use serde_json::Value;
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Output from one turn of an interactive compact session.
@@ -27,7 +25,7 @@ pub struct InteractiveCompactOutput {
 /// session has its own `SessionStore` for its own `log.jsonl`; messages
 /// exchanged during compaction are persisted there, not in the main session.
 pub struct InteractiveCompactState {
-    pub source_range: EntrySpan,
+    pub source_range: CanonicalSpan,
     pub evidence_pack_ref: ArtifactRef,
     pub compact_store: SessionStore,
     /// Accumulated LLM conversation for the compact session (system prompt +
@@ -37,109 +35,21 @@ pub struct InteractiveCompactState {
     pub current_content: String,
 }
 
-/// Select a contiguous source range suitable for interactive compact.
-/// Returns `None` when all old entries are already covered or when the only
-/// remaining entries are within the recent-turn window.
-pub fn select_source_range(
-    entries: &[SessionEntry],
-    policy: &MicroCompactPolicy,
-) -> Option<EntrySpan> {
-    if entries.is_empty() {
-        return None;
-    }
-
-    let mut covered_until: u64 = entries.first().map(|e| e.meta.seq).unwrap_or(0);
-    for entry in entries {
-        if let SessionEntryKind::InteractiveCompact(ic) = &entry.kind {
-            if matches!(ic.outcome, InteractiveCompactOutcome::Committed) {
-                covered_until = covered_until.max(ic.source_range.end_seq_exclusive);
-            }
-        }
-    }
-
-    let cutoff_idx = preserve_cutoff(entries, policy);
-    let cutoff_seq = if cutoff_idx < entries.len() {
-        entries[cutoff_idx].meta.seq
-    } else {
-        entries
-            .last()
-            .map(|e| e.meta.seq.saturating_add(1))
-            .unwrap_or(0)
-    };
-
-    if covered_until >= cutoff_seq {
-        return None;
-    }
-
-    Some(EntrySpan {
-        start_seq: covered_until,
-        end_seq_exclusive: cutoff_seq,
-    })
-}
-
 /// Generate an evidence pack artifact containing entry excerpts, artifact
 /// refs, and checksum metadata for every entry in the source range.
-pub fn generate_evidence_pack(
-    entries: &[SessionEntry],
-    source_range: &EntrySpan,
-    overlay: &CompactOverlay,
+pub fn generate_canonical_evidence_pack(
+    records: &[CanonicalRecord],
+    source_range: &CanonicalSpan,
     artifact_store: &crate::session::store::fs::ArtifactStore,
     session_id: &SessionId,
 ) -> Result<ArtifactRef> {
-    let _tool_names = tool_name_index(entries);
-    let mut ev_entries: Vec<Value> = Vec::new();
-    let mut total_byte_len = 0usize;
-
-    for entry in entries {
-        if entry.meta.seq < source_range.start_seq
-            || entry.meta.seq >= source_range.end_seq_exclusive
-        {
-            continue;
-        }
-        let (kind_str, excerpt) = entry_excerpt(entry, overlay);
-        let artifact_refs = entry_artifact_refs(entry);
-        let mut item = serde_json::json!({
-            "seq": entry.meta.seq,
-            "kind": kind_str,
-            "excerpt": excerpt,
-        });
-        if !artifact_refs.is_empty() {
-            let refs: Vec<Value> = artifact_refs
-                .iter()
-                .map(|a| {
-                    serde_json::json!({
-                        "relative_path": a.relative_path.display().to_string(),
-                        "sha256": a.sha256,
-                        "byte_len": a.byte_len,
-                    })
-                })
-                .collect();
-            item["artifact_refs"] = serde_json::Value::Array(refs);
-        }
-        // Record overlay information when this entry was micro-compacted.
-        if let Some(view) = overlay.view_for(&entry.meta.id) {
-            item["overlay_compact_entry_id"] =
-                serde_json::Value::String(view.compact_entry_id.0.clone());
-            if !view.artifact_refs.is_empty() {
-                let ov_refs: Vec<Value> = view
-                    .artifact_refs
-                    .iter()
-                    .map(|a| {
-                        serde_json::json!({
-                            "relative_path": a.relative_path.display().to_string(),
-                            "sha256": a.sha256,
-                            "byte_len": a.byte_len,
-                        })
-                    })
-                    .collect();
-                item["overlay_artifact_refs"] = serde_json::Value::Array(ov_refs);
-            }
-        }
-        // Per-entry checksum for integrity tracking.
-        item["excerpt_sha256"] = serde_json::Value::String(sha256_hex(excerpt.as_bytes()));
-        ev_entries.push(item);
-        total_byte_len += excerpt.len();
-    }
+    let evidence = canonical_evidence(records, source_range);
+    let total_byte_len = evidence.len();
+    let ev_entries = vec![serde_json::json!({
+        "kind": "canonical_evidence",
+        "excerpt": evidence,
+        "excerpt_sha256": sha256_hex(evidence.as_bytes()),
+    })];
 
     let pack_str = {
         let pack = serde_json::json!({
@@ -175,23 +85,10 @@ pub fn create_compact_store(project_root: &std::path::Path) -> Result<SessionSto
 
 /// Build the initial system prompt for the compact session.
 pub fn build_compact_system_msg(
-    entries: &[SessionEntry],
-    source_range: &EntrySpan,
-    overlay: &CompactOverlay,
+    records: &[CanonicalRecord],
+    source_range: &CanonicalSpan,
 ) -> async_openai::types::ChatCompletionRequestMessage {
-    let mut evidence = String::new();
-    for entry in entries {
-        if entry.meta.seq < source_range.start_seq
-            || entry.meta.seq >= source_range.end_seq_exclusive
-        {
-            continue;
-        }
-        let (kind, excerpt) = entry_excerpt(entry, overlay);
-        evidence.push_str(&format!(
-            "  [seq {}] {}: {}\n",
-            entry.meta.seq, kind, excerpt
-        ));
-    }
+    let evidence = canonical_evidence(records, source_range);
 
     let prompt = format!(
         r#"You are compressing a range of conversation history. Produce a concise
@@ -224,7 +121,10 @@ pub fn commit_to_main_store(
     state: &InteractiveCompactState,
 ) -> Result<InteractiveCompactEntry> {
     let ic_entry = InteractiveCompactEntry {
-        source_range: state.source_range.clone(),
+        source_range: EntrySpan {
+            start_seq: state.source_range.start_seq,
+            end_seq_exclusive: state.source_range.end_seq_exclusive,
+        },
         compact_session_id: state.compact_store.session_id().clone(),
         outcome: InteractiveCompactOutcome::Committed,
         result: Some(InteractiveCompactResult {
@@ -246,80 +146,6 @@ pub fn commit_to_main_store(
 
     Ok(ic_entry)
 }
-
-// ------------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------------
-
-fn entry_excerpt(entry: &SessionEntry, overlay: &CompactOverlay) -> (&'static str, String) {
-    // If a MicroCompact overlay provides a view, use its preview as the excerpt.
-    if let Some(view) = overlay.view_for(&entry.meta.id) {
-        return ("ToolResult-compacted", view.replacement_preview.clone());
-    }
-
-    match &entry.kind {
-        SessionEntryKind::UserMessage(u) => ("UserMessage", truncate_str(&u.content, 400)),
-        SessionEntryKind::AssistantMessage(a) => {
-            ("AssistantMessage", truncate_str(&a.content, 400))
-        }
-        SessionEntryKind::ToolCall(c) => (
-            "ToolCall",
-            format!(
-                "{} {}",
-                c.tool_name,
-                truncate_str(
-                    &c.inline_args
-                        .as_ref()
-                        .map(|v| v.to_string())
-                        .unwrap_or_default(),
-                    200,
-                )
-            ),
-        ),
-        SessionEntryKind::ToolResult(r) => {
-            let preview = r
-                .preview
-                .clone()
-                .unwrap_or_else(|| truncate_str(r.inline_content.as_deref().unwrap_or(""), 300));
-            let tool = r.call_entry_id.0.clone(); // approximate — caller has tool_name_index
-            ("ToolResult", format!("[{}] {}", tool, preview))
-        }
-        SessionEntryKind::MicroCompact(mc) => ("MicroCompact", mc.operation_digest.clone()),
-        SessionEntryKind::InteractiveCompact(ic) => {
-            ("InteractiveCompact", ic.operation_digest.clone())
-        }
-        SessionEntryKind::SystemNote(n) => ("SystemNote", n.content.clone()),
-    }
-}
-
-fn entry_artifact_refs(entry: &SessionEntry) -> Vec<&ArtifactRef> {
-    match &entry.kind {
-        SessionEntryKind::ToolCall(c) => c.arg_artifacts.iter().collect(),
-        SessionEntryKind::ToolResult(r) => r.artifacts.iter().collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max_chars).collect();
-        out.push_str("...");
-        out
-    }
-}
-
-fn tool_name_index(entries: &[SessionEntry]) -> HashMap<crate::session::model::EntryId, String> {
-    let mut map = HashMap::new();
-    for entry in entries {
-        if let SessionEntryKind::ToolCall(call) = &entry.kind {
-            map.insert(entry.meta.id.clone(), call.tool_name.clone());
-        }
-    }
-    map
-}
-
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

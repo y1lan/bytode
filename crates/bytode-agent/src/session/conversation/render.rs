@@ -1,9 +1,13 @@
 //! Canonical context view construction. Builds `CanonicalContext` from
 //! replayed canonical records with compact replacements applied.
 
+use crate::error::Result;
 use crate::session::conversation::model::{
-    CanonicalCompactReplacement, CanonicalRecord, CanonicalRecordKind,
+    CanonicalAssistantPart, CanonicalAssistantResponse, CanonicalCompactReplacement,
+    CanonicalContent, CanonicalMessageId, CanonicalRecord, CanonicalRecordKind,
+    CanonicalToolResultCompacted, ResponseId, ToolCallId, TurnId,
 };
+use std::collections::{HashMap, HashSet};
 
 /// The canonical context view presented to the provider adapter.
 /// Compact replacements have already been applied — this is the
@@ -17,78 +21,143 @@ pub struct CanonicalContext {
 /// `CompactReplacement` records. A `CompactReplacement` replaces all records
 /// whose seq falls within its source span with a single synthetic
 /// `AssistantResponse` containing the replacement text.
-pub fn build_canonical_context(records: &[CanonicalRecord]) -> CanonicalContext {
-    let mut replacements: Vec<&CanonicalCompactReplacement> = records
+pub fn build_canonical_context(records: &[CanonicalRecord]) -> Result<CanonicalContext> {
+    let mut replacements: Vec<(&CanonicalCompactReplacement, u64)> = records
         .iter()
         .filter_map(|r| match &r.kind {
-            CanonicalRecordKind::CompactReplacement(cr) => Some(cr),
+            CanonicalRecordKind::CompactReplacement(cr) => Some((cr, r.meta.seq)),
             _ => None,
         })
         .collect();
+    let mut compacted_tool_results: HashMap<(TurnId, ResponseId, ToolCallId), (u64, &CanonicalToolResultCompacted)> =
+        HashMap::new();
+
+    for record in records {
+        if let CanonicalRecordKind::ToolResultCompacted(compacted) = &record.kind {
+            compacted_tool_results.insert(
+                (
+                    compacted.turn_id.clone(),
+                    compacted.response_id.clone(),
+                    compacted.tool_call_id.clone(),
+                ),
+                (record.meta.seq, compacted),
+            );
+        }
+    }
 
     // Stable sort by start_seq so overlapping detection is deterministic.
-    replacements.sort_by_key(|cr| cr.source.start_seq);
+    replacements.sort_by_key(|(cr, _)| cr.source.start_seq);
+    for i in 1..replacements.len() {
+        let prev = replacements[i - 1].0;
+        let curr = replacements[i].0;
+        if curr.source.start_seq < prev.source.end_seq_exclusive {
+            return Err(crate::error::BytodeError::Session(format!(
+                "overlapping canonical compact ranges: seq {}-{} and {}-{}",
+                prev.source.start_seq,
+                prev.source.end_seq_exclusive,
+                curr.source.start_seq,
+                curr.source.end_seq_exclusive,
+            )));
+        }
+    }
 
-    let mut replaced_until: Option<u64> = None;
+    let mut replacement_idx = 0usize;
+    let mut skip_until: Option<u64> = None;
     let mut effective: Vec<CanonicalRecord> = Vec::new();
+    let mut seen_compacted_targets: HashSet<(TurnId, ResponseId, ToolCallId)> = HashSet::new();
 
     for record in records {
         let seq = record.meta.seq;
 
-        // Consume any replacement whose source range starts at or before this seq.
-        while let Some(cr) = replacements.first() {
-            if cr.source.start_seq <= seq {
-                let end = cr.source.end_seq_exclusive;
-                replaced_until = Some(replaced_until.unwrap_or(0).max(end));
-                // Emit the replacement as a synthetic AssistantResponse.
+        if let Some(until) = skip_until {
+            if seq < until {
+                continue;
+            }
+            skip_until = None;
+        }
+
+        while let Some((cr, compact_seq)) = replacements.get(replacement_idx) {
+            if cr.source.start_seq < seq {
+                return Err(crate::error::BytodeError::Session(format!(
+                    "canonical compact source start seq {} does not align to a record boundary",
+                    cr.source.start_seq
+                )));
+            }
+            if cr.source.start_seq == seq {
                 effective.push(CanonicalRecord {
                     meta: record.meta.clone(),
-                    kind: CanonicalRecordKind::AssistantResponse(
-                        crate::session::conversation::model::CanonicalAssistantResponse {
-                            turn_id: crate::session::conversation::model::TurnId("compact".into()),
-                            response_id: crate::session::conversation::model::ResponseId(
-                                "compact".into(),
-                            ),
-                            message_id: crate::session::conversation::model::CanonicalMessageId(
-                                "compact".into(),
-                            ),
-                            parts: vec![
-                                crate::session::conversation::model::CanonicalAssistantPart::Text {
-                                    content: cr.content.clone(),
-                                },
-                            ],
-                        },
-                    ),
+                    kind: CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                        turn_id: TurnId(format!("compact-{}", compact_seq)),
+                        response_id: ResponseId(format!("compact-r-{}", compact_seq)),
+                        message_id: CanonicalMessageId(format!("compact-m-{}", compact_seq)),
+                        parts: vec![CanonicalAssistantPart::Text {
+                            content: cr.content.clone(),
+                        }],
+                    }),
                 });
-                replacements.remove(0);
-            } else {
+                skip_until = Some(cr.source.end_seq_exclusive);
+                replacement_idx += 1;
                 break;
             }
+            break;
         }
-
-        // Skip records that fall inside a replacement range.
-        if let Some(until) = replaced_until {
-            if seq < until {
-                // Skip CompactReplacement records too — they're consumed above.
-                if matches!(record.kind, CanonicalRecordKind::CompactReplacement(_)) {
-                    continue;
-                }
-                // Still skip if within replaced range.
-                if seq < until {
-                    continue;
-                }
-            }
-        }
-
-        // Skip CompactReplacement records (already consumed).
-        if matches!(record.kind, CanonicalRecordKind::CompactReplacement(_)) {
+        if skip_until.is_some() {
             continue;
         }
 
-        effective.push(record.clone());
+        if matches!(
+            record.kind,
+            CanonicalRecordKind::CompactReplacement(_) | CanonicalRecordKind::ToolResultCompacted(_)
+        ) {
+            continue;
+        }
+
+        let mut record = record.clone();
+        if let CanonicalRecordKind::ToolResults(tr) = &mut record.kind {
+            for part in &mut tr.results {
+                let key = (
+                    tr.turn_id.clone(),
+                    tr.response_id.clone(),
+                    part.tool_call_id.clone(),
+                );
+                if let Some((_, compacted)) = compacted_tool_results.get(&key) {
+                    part.content = CanonicalContent::Inline(compacted.preview.clone());
+                    seen_compacted_targets.insert(key);
+                }
+            }
+        }
+        effective.push(record);
     }
 
-    CanonicalContext { records: effective }
+    if let Some((cr, _)) = replacements.get(replacement_idx) {
+        return Err(crate::error::BytodeError::Session(format!(
+            "canonical compact source start seq {} does not align to a record boundary",
+            cr.source.start_seq
+        )));
+    }
+
+    for ((turn_id, response_id, tool_call_id), _) in compacted_tool_results {
+        if !seen_compacted_targets.contains(&(
+            turn_id.clone(),
+            response_id.clone(),
+            tool_call_id.clone(),
+        )) && !records.iter().any(|record| {
+            matches!(
+                &record.kind,
+                CanonicalRecordKind::ToolResults(tr)
+                    if tr.turn_id == turn_id
+                        && tr.response_id == response_id
+                        && tr.results.iter().any(|part| part.tool_call_id == tool_call_id)
+            )
+        }) {
+            return Err(crate::error::BytodeError::Session(format!(
+                "canonical compacted tool result target not found: turn_id={}, response_id={}, tool_call_id={}",
+                turn_id.0, response_id.0, tool_call_id.0
+            )));
+        }
+    }
+
+    Ok(CanonicalContext { records: effective })
 }
 
 #[cfg(test)]
@@ -96,9 +165,9 @@ mod tests {
     use super::*;
     use crate::session::conversation::model::{
         CanonicalAssistantPart, CanonicalAssistantResponse, CanonicalContent, CanonicalMessageId,
-        CanonicalMeta, CanonicalRecordKind, CanonicalSpan, CanonicalToolResultPart,
-        CanonicalToolResults, CanonicalToolStatus, CanonicalTurnFinished, CanonicalTurnStarted,
-        ResponseId, ToolCallId, TurnId,
+        CanonicalMeta, CanonicalRecordKind, CanonicalSpan, CanonicalToolResultCompacted,
+        CanonicalToolResultPart, CanonicalToolResults, CanonicalToolStatus, CanonicalTurnFinished,
+        CanonicalTurnStarted, ResponseId, ToolCallId, TurnId,
     };
     use crate::session::model::{ArtifactId, ArtifactKind, ArtifactRef, EntryId};
 
@@ -156,14 +225,14 @@ mod tests {
 
     #[test]
     fn empty_records_yields_empty_context() {
-        let ctx = build_canonical_context(&[]);
+        let ctx = build_canonical_context(&[]).unwrap();
         assert!(ctx.records.is_empty());
     }
 
     #[test]
     fn records_without_replacements_pass_through() {
         let records = vec![turn_started(0, "t1", "hello")];
-        let ctx = build_canonical_context(&records);
+        let ctx = build_canonical_context(&records).unwrap();
         assert_eq!(ctx.records.len(), 1);
     }
 
@@ -188,7 +257,7 @@ mod tests {
             },
         ];
 
-        let ctx = build_canonical_context(&records);
+        let ctx = build_canonical_context(&records).unwrap();
         assert_eq!(ctx.records.len(), 1);
         let CanonicalRecordKind::AssistantResponse(ar) = &ctx.records[0].kind else {
             panic!("expected AssistantResponse");
@@ -263,7 +332,7 @@ mod tests {
             },
         ];
 
-        let ctx = build_canonical_context(&records);
+        let ctx = build_canonical_context(&records).unwrap();
         // Should have: compact replacement (1) + turn_started (1) + assistant (1) + tool_results (1) + turn_finished (1)
         assert_eq!(ctx.records.len(), 5);
         // The tool call / tool result pair for t2 must be intact.
@@ -276,6 +345,7 @@ mod tests {
                 CanonicalRecordKind::ToolResults(_) => "ToolResults",
                 CanonicalRecordKind::TurnFinished(_) => "TurnFinished",
                 CanonicalRecordKind::CompactReplacement(_) => "CompactReplacement",
+                CanonicalRecordKind::ToolResultCompacted(_) => "ToolResultCompacted",
             })
             .collect();
         assert_eq!(
@@ -288,5 +358,196 @@ mod tests {
                 "TurnFinished"
             ]
         );
+    }
+
+    #[test]
+    fn tool_result_compacted_replaces_content_in_context() {
+        let records = vec![
+            turn_started(0, "t1", "task"),
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 1,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    message_id: CanonicalMessageId("m-1".into()),
+                    parts: vec![CanonicalAssistantPart::ToolCall {
+                        tool_call_id: ToolCallId("call_1".into()),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "a.rs"}),
+                    }],
+                }),
+            },
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 2,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResults(CanonicalToolResults {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    results: vec![CanonicalToolResultPart {
+                        tool_call_id: ToolCallId("call_1".into()),
+                        status: CanonicalToolStatus::Ok,
+                        content: CanonicalContent::Inline("very long content".into()),
+                    }],
+                }),
+            },
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 3,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    tool_call_id: ToolCallId("call_1".into()),
+                    preview: "short preview".into(),
+                    artifact_ref: artifact_ref(),
+                }),
+            },
+        ];
+
+        let ctx = build_canonical_context(&records).unwrap();
+        let CanonicalRecordKind::ToolResults(tr) = &ctx.records[2].kind else {
+            panic!("expected ToolResults");
+        };
+        let CanonicalContent::Inline(content) = &tr.results[0].content else {
+            panic!("expected inline compacted preview");
+        };
+        assert_eq!(content, "short preview");
+    }
+
+    #[test]
+    fn missing_compacted_tool_result_target_returns_error() {
+        let records = vec![
+            turn_started(0, "t1", "task"),
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 1,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                    turn_id: TurnId("t-missing".into()),
+                    response_id: ResponseId("r-missing".into()),
+                    tool_call_id: ToolCallId("call-missing".into()),
+                    preview: "short preview".into(),
+                    artifact_ref: artifact_ref(),
+                }),
+            },
+        ];
+
+        let err = build_canonical_context(&records).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("canonical compacted tool result target not found"));
+    }
+
+    #[test]
+    fn missing_compacted_tool_result_response_returns_error() {
+        let records = vec![
+            turn_started(0, "t1", "task"),
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 1,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    message_id: CanonicalMessageId("m-1".into()),
+                    parts: vec![CanonicalAssistantPart::ToolCall {
+                        tool_call_id: ToolCallId("call_1".into()),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "a.rs"}),
+                    }],
+                }),
+            },
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 2,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResults(CanonicalToolResults {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    results: vec![CanonicalToolResultPart {
+                        tool_call_id: ToolCallId("call_1".into()),
+                        status: CanonicalToolStatus::Ok,
+                        content: CanonicalContent::Inline("content".into()),
+                    }],
+                }),
+            },
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 3,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r-missing".into()),
+                    tool_call_id: ToolCallId("call_1".into()),
+                    preview: "preview".into(),
+                    artifact_ref: artifact_ref(),
+                }),
+            },
+        ];
+
+        assert!(build_canonical_context(&records).is_err());
+    }
+
+    #[test]
+    fn missing_compacted_tool_result_tool_call_returns_error() {
+        let records = vec![
+            turn_started(0, "t1", "task"),
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 1,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    message_id: CanonicalMessageId("m-1".into()),
+                    parts: vec![CanonicalAssistantPart::ToolCall {
+                        tool_call_id: ToolCallId("call_1".into()),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "a.rs"}),
+                    }],
+                }),
+            },
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 2,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResults(CanonicalToolResults {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    results: vec![CanonicalToolResultPart {
+                        tool_call_id: ToolCallId("call_1".into()),
+                        status: CanonicalToolStatus::Ok,
+                        content: CanonicalContent::Inline("content".into()),
+                    }],
+                }),
+            },
+            CanonicalRecord {
+                meta: CanonicalMeta {
+                    seq: 3,
+                    created_at: now(),
+                },
+                kind: CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                    turn_id: TurnId("t1".into()),
+                    response_id: ResponseId("r1".into()),
+                    tool_call_id: ToolCallId("call-missing".into()),
+                    preview: "preview".into(),
+                    artifact_ref: artifact_ref(),
+                }),
+            },
+        ];
+
+        assert!(build_canonical_context(&records).is_err());
     }
 }

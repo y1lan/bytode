@@ -7,13 +7,14 @@ use crate::llm::{DeepSeekClient, LlmOutput, ToolCall};
 use crate::project::ProjectProfile;
 use crate::session::compact::interactive::{
     self, InteractiveCompactState, build_compact_system_msg, commit_to_main_store,
-    create_compact_store, generate_evidence_pack, select_source_range,
+    create_compact_store, generate_canonical_evidence_pack,
 };
 use crate::session::compact::kind_for_tool;
 use crate::session::conversation::{
     CanonicalAssistantPart, CanonicalAssistantResponse, CanonicalContent, CanonicalMessageId,
     CanonicalRecord, CanonicalRecordKind, CanonicalToolResultPart, CanonicalToolResults,
     CanonicalToolStatus as CcToolStatus, ResponseId, ToolCallId, TurnId,
+    select_canonical_source_span,
 };
 use crate::session::{InteractiveCompactEntry, SessionId, SessionRuntime, ToolStatus};
 use crate::tools::{ToolRegistry, ToolResult};
@@ -150,16 +151,8 @@ impl Agent {
                 return Ok(AgentOutput::Text("(cancelled)".into()));
             }
 
-            let cc = self.runtime.canonical_context()?;
-            let mut messages = ProviderAdapter::adapt(&cc)?;
-            messages.insert(
-                0,
-                crate::llm::build_system_message(&self.context.core_prompt()),
-            );
-            if self.context.last_was_failure() {
-                messages.push(crate::llm::build_system_message(&self.context.sop_prompt()));
-                self.context.clear_last_failure();
-            }
+            let sop_needed = self.context.last_was_failure();
+            let mut messages = self.build_provider_messages(sop_needed)?;
 
             let ctx_used = self.context.estimate_tokens(&messages);
             let ctx_total = self.context.ctx_total();
@@ -170,7 +163,10 @@ impl Agent {
                 .maybe_micro_compact_for_request(ctx_used, ctx_total)?
                 .is_some()
             {
-                // Rebuild from canonical context after compaction.
+                messages = self.build_provider_messages(sop_needed)?;
+            }
+            if sop_needed {
+                self.context.clear_last_failure();
             }
 
             let tools = self.registry.to_openai_format();
@@ -405,28 +401,24 @@ impl Agent {
     /// Select a source range, generate an evidence pack, and enter
     /// compact session, and enter `InteractiveCompact` mode.
     pub fn start_interactive_compact(&mut self) -> Result<()> {
-        let entries = self.runtime.replay_entries()?;
-        let overlay = crate::session::compact::CompactOverlay::from_entries(&entries);
+        let canonical_records = self.runtime.canonical_records()?;
+        let source_range = select_canonical_source_span(&canonical_records).ok_or_else(|| {
+            crate::error::BytodeError::Session(
+                "当前对话尚短，暂无可压缩的历史：压缩只作用于超出最近窗口的旧对话，请先积累更多轮次后再试。"
+                    .into(),
+            )
+        })?;
 
-        let source_range =
-            select_source_range(&entries, self.runtime.policy()).ok_or_else(|| {
-                crate::error::BytodeError::Session(
-                    "当前对话尚短，暂无可压缩的历史：压缩只作用于超出最近窗口的旧对话，请先积累更多轮次后再试。"
-                        .into(),
-                )
-            })?;
-
-        let evidence_pack_ref = generate_evidence_pack(
-            &entries,
+        let evidence_pack_ref = generate_canonical_evidence_pack(
+            &canonical_records,
             &source_range,
-            &overlay,
             self.runtime.artifact_store(),
             self.runtime.session_id(),
         )?;
 
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let compact_store = create_compact_store(&project_root)?;
-        let system_msg = build_compact_system_msg(&entries, &source_range, &overlay);
+        let system_msg = build_compact_system_msg(&canonical_records, &source_range);
         let start_seq = source_range.start_seq;
         let end_seq = source_range.end_seq_exclusive;
 
@@ -529,6 +521,11 @@ impl Agent {
         }
 
         let ic_entry = commit_to_main_store(&mut self.runtime.store_mut(), &state)?;
+        self.runtime.append_canonical_compact_replacement(
+            state.source_range.clone(),
+            state.current_content.clone(),
+            state.evidence_pack_ref.clone(),
+        )?;
 
         self.mode = AgentMode::Normal;
         tracing::info!(
@@ -616,6 +613,22 @@ impl Agent {
 
     pub fn set_model(&mut self, model: String) {
         self.llm.set_model(model);
+    }
+
+    fn build_provider_messages(
+        &self,
+        sop_needed: bool,
+    ) -> Result<Vec<async_openai::types::ChatCompletionRequestMessage>> {
+        let cc = self.runtime.canonical_context()?;
+        let mut messages = ProviderAdapter::adapt(&cc)?;
+        messages.insert(
+            0,
+            crate::llm::build_system_message(&self.context.core_prompt()),
+        );
+        if sop_needed {
+            messages.push(crate::llm::build_system_message(&self.context.sop_prompt()));
+        }
+        Ok(messages)
     }
 
     pub fn mode(&self) -> AgentMode {

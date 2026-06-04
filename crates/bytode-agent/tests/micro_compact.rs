@@ -6,12 +6,18 @@
 //! - repeated compaction of one entry resolves to the largest-seq view
 
 use bytode_agent::session::compact::run_micro_compact;
+use bytode_agent::session::conversation::{
+    CanonicalAssistantPart, CanonicalAssistantResponse, CanonicalContent, CanonicalMessageId,
+    CanonicalRecord, CanonicalRecordKind, CanonicalToolResultPart, CanonicalToolResults,
+    CanonicalToolStatus, CanonicalTurnFinished, CanonicalTurnStarted, ResponseId, ToolCallId,
+    TurnId,
+};
 use bytode_agent::session::{
-    ArtifactId, ArtifactKind, ArtifactRef, AssistantMessageEntry, CompactOverlay, EntryId,
-    EntryMeta, EntrySpan, InteractiveCompactEntry, InteractiveCompactOutcome,
-    InteractiveCompactResult, MicroCompactEntry, MicroCompactPolicy, RenderedEntry, SessionEntry,
-    SessionEntryKind, SessionId, SessionRuntime, SessionStore, ToolCallEntry, ToolResultEntry,
-    ToolStatus, UserMessageEntry, render_context_entries,
+    ArtifactId, ArtifactKind, ArtifactRef, CompactOverlay, EntryId, EntryMeta, EntrySpan,
+    InteractiveCompactEntry, InteractiveCompactOutcome, InteractiveCompactResult,
+    MicroCompactEntry, MicroCompactPolicy, RenderedEntry, SessionEntry, SessionEntryKind,
+    SessionId, SessionRuntime, SessionStore, ToolCallEntry, ToolResultEntry, ToolStatus,
+    UserMessageEntry, render_context_entries,
 };
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -217,6 +223,63 @@ fn record_bloat(rt: &mut SessionRuntime, content: &str) {
         ArtifactKind::ToolOutput,
         content,
     )
+    .unwrap();
+    append_canonical_tool_turn(rt, "task", content);
+}
+
+fn append_canonical_tool_turn(rt: &mut SessionRuntime, user_content: &str, tool_content: &str) {
+    let turn_id = format!("t-{}", rt.cc_next_meta().unwrap().seq);
+    let turn_id = TurnId(turn_id);
+    let response_id = ResponseId(format!("r-{}", turn_id.0));
+    let tool_call_id = ToolCallId(format!("call-{}", turn_id.0));
+
+    let meta = rt.cc_next_meta().unwrap();
+    rt.cc_append(CanonicalRecord {
+        meta,
+        kind: CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {
+            turn_id: turn_id.clone(),
+            user_message_id: CanonicalMessageId(format!("m-{}", meta.seq)),
+            content: user_content.into(),
+        }),
+    })
+    .unwrap();
+
+    let meta = rt.cc_next_meta().unwrap();
+    rt.cc_append(CanonicalRecord {
+        meta,
+        kind: CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+            turn_id: turn_id.clone(),
+            response_id: response_id.clone(),
+            message_id: CanonicalMessageId(format!("m-{}", meta.seq)),
+            parts: vec![CanonicalAssistantPart::ToolCall {
+                tool_call_id: tool_call_id.clone(),
+                name: "web_search".into(),
+                arguments: serde_json::json!({"q": "x"}),
+            }],
+        }),
+    })
+    .unwrap();
+
+    let meta = rt.cc_next_meta().unwrap();
+    rt.cc_append(CanonicalRecord {
+        meta,
+        kind: CanonicalRecordKind::ToolResults(CanonicalToolResults {
+            turn_id: turn_id.clone(),
+            response_id: response_id.clone(),
+            results: vec![CanonicalToolResultPart {
+                tool_call_id,
+                status: CanonicalToolStatus::Ok,
+                content: CanonicalContent::Inline(tool_content.into()),
+            }],
+        }),
+    })
+    .unwrap();
+
+    let meta = rt.cc_next_meta().unwrap();
+    rt.cc_append(CanonicalRecord {
+        meta,
+        kind: CanonicalRecordKind::TurnFinished(CanonicalTurnFinished { turn_id }),
+    })
     .unwrap();
 }
 
@@ -617,7 +680,7 @@ fn interactive_compact_abort_does_not_affect_context() {
 
 #[test]
 fn interactive_compact_evidence_pack_is_artifactual() {
-    let mut store =
+    let store =
         SessionStore::open(SessionId("ic-evidence".into()), temp_root("ic-evidence")).unwrap();
 
     let evidence_content = r#"{"source_range":{"start_seq":0,"end_seq_exclusive":5}}"#;

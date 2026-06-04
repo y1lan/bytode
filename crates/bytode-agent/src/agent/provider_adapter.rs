@@ -140,7 +140,8 @@ impl ProviderAdapter {
                 }
 
                 CanonicalRecordKind::TurnFinished(_)
-                | CanonicalRecordKind::CompactReplacement(_) => {
+                | CanonicalRecordKind::CompactReplacement(_)
+                | CanonicalRecordKind::ToolResultCompacted(_) => {
                     // TurnFinished and CompactReplacement are not rendered as messages.
                 }
             }
@@ -153,10 +154,12 @@ impl ProviderAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::conversation::build_canonical_context;
     use crate::session::conversation::model::{
         CanonicalAssistantResponse, CanonicalCompactReplacement, CanonicalContent,
-        CanonicalMessageId, CanonicalMeta, CanonicalRecord, CanonicalSpan, CanonicalToolResultPart,
-        CanonicalToolResults, CanonicalToolStatus, CanonicalTurnFinished, CanonicalTurnStarted,
+        CanonicalMessageId, CanonicalMeta, CanonicalRecord, CanonicalSpan,
+        CanonicalToolResultCompacted, CanonicalToolResultPart, CanonicalToolResults,
+        CanonicalToolStatus, CanonicalTurnFinished, CanonicalTurnStarted,
     };
     use crate::session::model::{ArtifactId, ArtifactKind, ArtifactRef, EntryId};
 
@@ -506,5 +509,136 @@ mod tests {
             .unwrap_or("")
             .to_string();
         assert_eq!(role, "user");
+    }
+
+    #[test]
+    fn compacted_tool_result_record_is_skipped_by_adapter() {
+        let context = ctx(vec![
+            CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {
+                turn_id: TurnId("t1".into()),
+                user_message_id: CanonicalMessageId("m1".into()),
+                content: "task".into(),
+            }),
+            CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                tool_call_id: ToolCallId("call_1".into()),
+                preview: "preview".into(),
+                artifact_ref: artifact_ref(),
+            }),
+        ]);
+
+        let messages = ProviderAdapter::adapt(&context).unwrap();
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn canonical_context_micro_compact_shortens_provider_tool_message() {
+        let records = make_records(vec![
+            CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {
+                turn_id: TurnId("t1".into()),
+                user_message_id: CanonicalMessageId("m1".into()),
+                content: "task".into(),
+            }),
+            CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                message_id: CanonicalMessageId("m2".into()),
+                parts: vec![CanonicalAssistantPart::ToolCall {
+                    tool_call_id: ToolCallId("call_1".into()),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path": "a.rs"}),
+                }],
+            }),
+            CanonicalRecordKind::ToolResults(CanonicalToolResults {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                results: vec![CanonicalToolResultPart {
+                    tool_call_id: ToolCallId("call_1".into()),
+                    status: CanonicalToolStatus::Ok,
+                    content: CanonicalContent::Inline("very long content that should disappear".into()),
+                }],
+            }),
+            CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                tool_call_id: ToolCallId("call_1".into()),
+                preview: "preview only".into(),
+                artifact_ref: artifact_ref(),
+            }),
+            CanonicalRecordKind::TurnFinished(CanonicalTurnFinished {
+                turn_id: TurnId("t1".into()),
+            }),
+        ]);
+
+        let ctx = build_canonical_context(&records).unwrap();
+        let messages = ProviderAdapter::adapt(&ctx).unwrap();
+        let tool_msg = serde_json::to_value(&messages[2]).unwrap();
+        assert_eq!(
+            tool_msg.get("tool_call_id").and_then(|v| v.as_str()),
+            Some("call_1")
+        );
+        assert_eq!(tool_msg.get("content").and_then(|v| v.as_str()), Some("preview only"));
+    }
+
+    #[test]
+    fn canonical_context_interactive_compact_replaces_old_messages_for_provider() {
+        let records = make_records(vec![
+            CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {
+                turn_id: TurnId("t1".into()),
+                user_message_id: CanonicalMessageId("m1".into()),
+                content: "old task".into(),
+            }),
+            CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                message_id: CanonicalMessageId("m2".into()),
+                parts: vec![CanonicalAssistantPart::Text {
+                    content: "old answer".into(),
+                }],
+            }),
+            CanonicalRecordKind::TurnFinished(CanonicalTurnFinished {
+                turn_id: TurnId("t1".into()),
+            }),
+            CanonicalRecordKind::CompactReplacement(CanonicalCompactReplacement {
+                source: CanonicalSpan {
+                    start_seq: 0,
+                    end_seq_exclusive: 3,
+                },
+                content: "compressed summary".into(),
+                evidence_pack_ref: artifact_ref(),
+            }),
+            CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {
+                turn_id: TurnId("t2".into()),
+                user_message_id: CanonicalMessageId("m3".into()),
+                content: "new task".into(),
+            }),
+            CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                turn_id: TurnId("t2".into()),
+                response_id: ResponseId("r2".into()),
+                message_id: CanonicalMessageId("m4".into()),
+                parts: vec![CanonicalAssistantPart::Text {
+                    content: "new answer".into(),
+                }],
+            }),
+            CanonicalRecordKind::TurnFinished(CanonicalTurnFinished {
+                turn_id: TurnId("t2".into()),
+            }),
+        ]);
+
+        let ctx = build_canonical_context(&records).unwrap();
+        let messages = ProviderAdapter::adapt(&ctx).unwrap();
+        let contents: Vec<String> = messages
+            .iter()
+            .map(|m| {
+                serde_json::to_value(m)
+                    .unwrap()
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(contents, vec!["compressed summary", "new task", "new answer"]);
     }
 }

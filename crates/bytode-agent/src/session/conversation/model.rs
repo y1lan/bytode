@@ -43,6 +43,7 @@ pub enum CanonicalRecordKind {
     ToolResults(CanonicalToolResults),
     TurnFinished(CanonicalTurnFinished),
     CompactReplacement(CanonicalCompactReplacement),
+    ToolResultCompacted(CanonicalToolResultCompacted),
 }
 
 // ------------------------------------------------------------------
@@ -125,6 +126,15 @@ pub struct CanonicalCompactReplacement {
     pub source: CanonicalSpan,
     pub content: String,
     pub evidence_pack_ref: ArtifactRef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalToolResultCompacted {
+    pub turn_id: TurnId,
+    pub response_id: ResponseId,
+    pub tool_call_id: ToolCallId,
+    pub preview: String,
+    pub artifact_ref: ArtifactRef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -11,7 +11,8 @@ use crate::session::compact::{
 };
 use crate::session::context::{RenderedEntry, render_context_entries};
 use crate::session::conversation::{
-    CanonicalContext, CanonicalConversationStore, CanonicalMeta, CanonicalRecord,
+    CanonicalCompactReplacement, CanonicalContext, CanonicalConversationStore, CanonicalMeta,
+    CanonicalRecord, CanonicalRecordKind, CanonicalSpan, CanonicalToolResultCompacted,
     build_canonical_context,
 };
 use crate::session::model::{
@@ -20,6 +21,7 @@ use crate::session::model::{
 };
 use crate::session::store::SessionStore;
 use crate::session::store::fs::{ArtifactStore, record_inline_limit};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -277,6 +279,7 @@ impl SessionRuntime {
             saved_bytes = result.saved_bytes_estimate,
             "auto micro compact"
         );
+        self.append_canonical_micro_compact_records(&result)?;
         self.store
             .update_after_micro_compact(result.compact_entry_seq)?;
         Ok(Some(result))
@@ -315,10 +318,32 @@ impl SessionRuntime {
         self.cc_store.append(record)
     }
 
+    pub fn append_canonical_compact_replacement(
+        &mut self,
+        source: CanonicalSpan,
+        content: String,
+        evidence_pack_ref: ArtifactRef,
+    ) -> Result<()> {
+        let meta = self.cc_next_meta()?;
+        self.cc_append(CanonicalRecord {
+            meta,
+            kind: CanonicalRecordKind::CompactReplacement(CanonicalCompactReplacement {
+                source,
+                content,
+                evidence_pack_ref,
+            }),
+        })
+    }
+
     /// Build `CanonicalContext` from the canonical conversation log.
     pub fn canonical_context(&self) -> Result<CanonicalContext> {
         let records = self.cc_store.replay()?;
-        Ok(build_canonical_context(&records))
+        build_canonical_context(&records)
+    }
+
+    /// Replay the raw canonical records (no compact replacements applied).
+    pub fn canonical_records(&self) -> Result<Vec<CanonicalRecord>> {
+        self.cc_store.replay()
     }
 
     // ------------------------------------------------------------------
@@ -359,6 +384,7 @@ impl SessionRuntime {
             saved_bytes = result.saved_bytes_estimate,
             "auto micro compact"
         );
+        self.append_canonical_micro_compact_records(&result)?;
         self.store
             .update_after_micro_compact(result.compact_entry_seq)?;
         Ok(Some(result))
@@ -390,6 +416,7 @@ impl SessionRuntime {
             saved_bytes = result.saved_bytes_estimate,
             "auto micro compact"
         );
+        self.append_canonical_micro_compact_records(&result)?;
         self.store
             .update_after_micro_compact(result.compact_entry_seq)?;
         Ok(Some(result))
@@ -428,10 +455,100 @@ impl SessionRuntime {
             saved_bytes = result.saved_bytes_estimate,
             "auto micro compact"
         );
+        self.append_canonical_micro_compact_records(&result)?;
         self.store
             .update_after_micro_compact(result.compact_entry_seq)?;
         Ok(Some(result))
     }
+
+    fn append_canonical_micro_compact_records(
+        &mut self,
+        result: &MicroCompactResult,
+    ) -> Result<()> {
+        if result.compacted_entry_ids.is_empty() {
+            return Ok(());
+        }
+
+        let entries = self.store.replay_entries()?;
+        let records = self.cc_store.replay()?;
+        let mapping = map_flat_tool_results_to_canonical_targets(&entries, &records)?;
+
+        for (entry_id, artifact_ref) in result
+            .compacted_entry_ids
+            .iter()
+            .zip(result.archived_artifacts.iter())
+        {
+            let target = mapping.get(entry_id).ok_or_else(|| {
+                crate::error::BytodeError::Session(format!(
+                    "micro compact target {} has no canonical tool-result mapping",
+                    entry_id.0
+                ))
+            })?;
+            let meta = self.cc_next_meta()?;
+            self.cc_append(CanonicalRecord {
+                meta,
+                kind: CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
+                    turn_id: target.0.clone(),
+                    response_id: target.1.clone(),
+                    tool_call_id: target.2.clone(),
+                    preview: artifact_ref.preview.clone(),
+                    artifact_ref: artifact_ref.clone(),
+                }),
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+fn map_flat_tool_results_to_canonical_targets(
+    entries: &[SessionEntry],
+    records: &[CanonicalRecord],
+) -> Result<HashMap<EntryId, (
+    crate::session::conversation::TurnId,
+    crate::session::conversation::ResponseId,
+    crate::session::conversation::ToolCallId,
+)>> {
+    let flat_tool_result_ids: Vec<EntryId> = entries
+        .iter()
+        .filter_map(|entry| match entry.kind {
+            SessionEntryKind::ToolResult(_) => Some(entry.meta.id.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let canonical_targets: Vec<_> = records
+        .iter()
+        .filter_map(|record| match &record.kind {
+            CanonicalRecordKind::ToolResults(tr) => Some(
+                tr.results
+                    .iter()
+                    .map(|part| {
+                        (
+                            tr.turn_id.clone(),
+                            tr.response_id.clone(),
+                            part.tool_call_id.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
+    if flat_tool_result_ids.len() != canonical_targets.len() {
+        return Err(crate::error::BytodeError::Session(format!(
+            "flat/canonical tool-result count mismatch: {} flat vs {} canonical",
+            flat_tool_result_ids.len(),
+            canonical_targets.len(),
+        )));
+    }
+
+    Ok(flat_tool_result_ids
+        .into_iter()
+        .zip(canonical_targets)
+        .collect())
 }
 
 fn now_secs() -> i64 {
