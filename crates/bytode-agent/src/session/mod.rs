@@ -19,6 +19,7 @@ pub use model::{
 };
 pub use runtime::SessionRuntime;
 pub use store::fs::{
-    default_session_id, new_session_id, project_hash, session_root, sessions_root,
+    default_session_id, list_project_sessions, new_session_id, project_hash, session_root,
+    sessions_root, SessionSummary,
 };
 pub use store::{SessionState, SessionStore};

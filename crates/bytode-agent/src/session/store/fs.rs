@@ -113,6 +113,94 @@ pub fn ensure_session_tree(session_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Summary of one discovered session, for the startup picker.
+pub struct SessionSummary {
+    pub session_id: SessionId,
+    pub last_activity: Option<i64>,
+    pub first_user_message: Option<String>,
+}
+
+/// Discover all sessions belonging to `project_root`, sorted by most-recent
+/// activity first. A session belongs to the project when its directory name is
+/// `project-<hash>` or `project-<hash>-<suffix>`.
+pub fn list_project_sessions(project_root: &Path) -> Result<Vec<SessionSummary>> {
+    let root = sessions_root()?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let prefix = format!("project-{}", project_hash(project_root));
+    let mut summaries = Vec::new();
+
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name != prefix && !name.starts_with(&format!("{prefix}-")) {
+            continue;
+        }
+
+        let session_root = entry.path();
+        summaries.push(SessionSummary {
+            session_id: SessionId(name),
+            last_activity: session_last_activity(&session_root),
+            first_user_message: session_first_user_message(&session_root),
+        });
+    }
+
+    // Most recent first. Sessions without recorded activity sink to the bottom.
+    summaries.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    Ok(summaries)
+}
+
+/// Last activity timestamp: `last_model_request_at` from `state.json`, falling
+/// back to the events log file mtime.
+fn session_last_activity(session_root: &Path) -> Option<i64> {
+    let state_path = session_root.join("state.json");
+    if let Ok(content) = std::fs::read_to_string(&state_path) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(ts) = value.get("last_model_request_at").and_then(|v| v.as_i64()) {
+                return Some(ts);
+            }
+        }
+    }
+
+    let log_path = session_root.join("events").join("log.jsonl");
+    let meta = std::fs::metadata(&log_path).ok()?;
+    let modified = meta.modified().ok()?;
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(secs as i64)
+}
+
+/// First user message content (truncated) from the events log.
+fn session_first_user_message(session_root: &Path) -> Option<String> {
+    let log_path = session_root.join("events").join("log.jsonl");
+    let reader = crate::session::store::log::SessionLogReader::new(log_path);
+    let entries = reader.read_all().ok()?;
+    for entry in entries {
+        if let crate::session::model::SessionEntryKind::UserMessage(u) = entry.kind {
+            return Some(truncate_summary(&u.content, 60));
+        }
+    }
+    None
+}
+
+fn truncate_summary(s: &str, max_chars: usize) -> String {
+    let one_line = s.replace('\n', " ");
+    if one_line.chars().count() <= max_chars {
+        one_line
+    } else {
+        let mut out: String = one_line.chars().take(max_chars).collect();
+        out.push_str("...");
+        out
+    }
+}
+
 /// Reads and writes artifact payloads under a session root.
 pub struct ArtifactStore {
     session_root: PathBuf,
