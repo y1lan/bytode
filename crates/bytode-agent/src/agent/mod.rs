@@ -145,6 +145,8 @@ impl Agent {
 
         loop {
             if self.cancelled.load(Ordering::Relaxed) {
+                self.runtime
+                    .record_system_note(crate::session::SystemNoteKind::Cancelled, "(cancelled)")?;
                 return Ok(AgentOutput::Text("(cancelled)".into()));
             }
 
@@ -555,6 +557,17 @@ impl Agent {
         self.mode == AgentMode::InteractiveCompact
     }
 
+    /// Persist an out-of-band interaction note (slash command, error) so it is
+    /// restored in the UI history after a restart.
+    pub fn record_system_note(
+        &mut self,
+        kind: crate::session::SystemNoteKind,
+        content: &str,
+    ) -> Result<()> {
+        self.runtime.record_system_note(kind, content)?;
+        Ok(())
+    }
+
     async fn execute_tool(&self, call: &ToolCall) -> Result<ToolResult> {
         let tool =
             self.registry
@@ -720,8 +733,23 @@ impl Agent {
                 // Audit-only entries — not shown in conversation history.
                 crate::session::SessionEntryKind::MicroCompact(_)
                 | crate::session::SessionEntryKind::InteractiveCompact(_) => {}
-                // SystemNote restore is wired in a later step.
-                crate::session::SessionEntryKind::SystemNote(_) => {}
+                // System notes restore the out-of-band interaction history:
+                // slash commands as user lines, errors/cancellations as errors.
+                crate::session::SessionEntryKind::SystemNote(n) => {
+                    flush_tool_results(&mut history, &mut pending_tool_results);
+                    match n.kind {
+                        crate::session::SystemNoteKind::SlashCommand => {
+                            history.push(HistoryEntry::User(UserMessage {
+                                body: n.content.clone(),
+                                meta: None,
+                            }));
+                        }
+                        crate::session::SystemNoteKind::Error
+                        | crate::session::SystemNoteKind::Cancelled => {
+                            history.push(HistoryEntry::Error(n.content.clone()));
+                        }
+                    }
+                }
             }
         }
         flush_tool_results(&mut history, &mut pending_tool_results);
