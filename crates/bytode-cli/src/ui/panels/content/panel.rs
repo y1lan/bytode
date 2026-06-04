@@ -9,7 +9,7 @@ use crate::ui::events::{
 };
 use crate::ui::panels::{BG, PanelContext, RenderContext, TXT, TXT_SUBTLE, UiContext, panel_block};
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 use std::cell::{Cell, RefCell};
 
 pub struct ContentPanel {
@@ -139,6 +139,7 @@ impl ContentPanel {
 
         let paragraph = Paragraph::new(lines)
             .style(Style::default().fg(TXT).bg(BG))
+            .wrap(Wrap { trim: false })
             .scroll((
                 self.scroll_offset(self.last_total_lines.get(), visible) as u16,
                 0,
