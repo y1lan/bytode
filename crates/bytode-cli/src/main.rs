@@ -189,7 +189,13 @@ async fn main() -> Result<()> {
     };
 
     let llm = DeepSeekClient::new(api_key, cli.model.clone(), None)?;
-    let session_id = agent::session::default_session_id(&project_root);
+    // Interactive mode lets the user pick or create a session at startup;
+    // one-shot task mode always uses the default per-project session.
+    let session_id = if cli.task.is_none() {
+        pick_session(&project_root)?
+    } else {
+        agent::session::default_session_id(&project_root)
+    };
     let session_root = agent::session::session_root(&session_id)?;
     let mut agent = Agent::new(
         llm,
@@ -249,6 +255,80 @@ async fn main() -> Result<()> {
 
     lsp_client.shutdown().await;
     Ok(())
+}
+
+/// Present the startup session picker on the terminal. Lists existing sessions
+/// for this project (most recent first) plus a "new session" option. Empty
+/// input selects the most recent session; an empty list creates a new one.
+fn pick_session(project_root: &Path) -> Result<agent::session::SessionId> {
+    use std::io::BufRead;
+
+    let sessions = agent::session::list_project_sessions(project_root)?;
+    if sessions.is_empty() {
+        return Ok(agent::session::default_session_id(project_root));
+    }
+
+    println!("Select a session:");
+    println!("  [0] New session");
+    for (i, s) in sessions.iter().enumerate() {
+        let when = s
+            .last_activity
+            .map(format_timestamp)
+            .unwrap_or_else(|| "unknown".into());
+        let msg = s.first_user_message.as_deref().unwrap_or("(empty)");
+        println!("  [{}] {}  {}  {}", i + 1, s.session_id.as_str(), when, msg);
+    }
+    print!("Choice [Enter = most recent]: ");
+    let _ = std::io::stdout().flush();
+
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let choice = line.trim();
+
+    if choice.is_empty() {
+        // Most recent — the list is sorted most-recent-first.
+        return Ok(sessions[0].session_id.clone());
+    }
+
+    let n: usize = choice.parse().map_err(|_| {
+        error::BytodeError::Session(format!("invalid session choice: {choice}"))
+    })?;
+    if n == 0 {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        return Ok(agent::session::new_session_id(project_root, secs));
+    }
+    sessions
+        .get(n - 1)
+        .map(|s| s.session_id.clone())
+        .ok_or_else(|| error::BytodeError::Session(format!("session {n} out of range")))
+}
+
+/// Format a unix-seconds timestamp as a `YYYY-MM-DD HH:MM` string (UTC).
+fn format_timestamp(secs: i64) -> String {
+    // Civil date from days since epoch (Howard Hinnant's algorithm).
+    let total_secs = secs.max(0);
+    let days = total_secs / 86_400;
+    let rem = total_secs % 86_400;
+    let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
+
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year, month, day, hour, minute
+    )
 }
 
 fn get_git_branch(root: &Path) -> Option<String> {
