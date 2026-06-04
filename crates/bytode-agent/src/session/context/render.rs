@@ -110,6 +110,7 @@ pub fn render_context_entries(
             }
             SessionEntryKind::MicroCompact(_) => {}
             SessionEntryKind::InteractiveCompact(_) => {}
+            SessionEntryKind::SystemNote(_) => {}
         }
     }
 

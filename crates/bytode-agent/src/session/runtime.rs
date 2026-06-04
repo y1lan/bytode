@@ -110,6 +110,24 @@ impl SessionRuntime {
         })
     }
 
+    /// Record an out-of-band interaction note (slash command, error, cancelled)
+    /// in the audit log for UI history restore. Not part of the canonical
+    /// conversation, so it never reaches the provider.
+    pub fn record_system_note(
+        &mut self,
+        kind: crate::session::model::SystemNoteKind,
+        content: &str,
+    ) -> Result<EntryId> {
+        let meta = self.store.next_meta();
+        self.store.commit(SessionEntry {
+            meta,
+            kind: SessionEntryKind::SystemNote(crate::session::model::SystemNoteEntry {
+                kind,
+                content: content.to_string(),
+            }),
+        })
+    }
+
     /// Record a tool call. Oversized args are archived as `ToolArgs`.
     pub fn record_tool_call(
         &mut self,

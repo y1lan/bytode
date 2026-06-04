@@ -9,5 +9,5 @@ pub use entry::{
     AssistantMessageEntry, CompactedEntryView, EntryId, EntryMeta, EntrySpan,
     InteractiveCompactEntry, InteractiveCompactOutcome, InteractiveCompactResult,
     MicroCompactEntry, MicroCompactResult, SessionEntry, SessionEntryKind, SessionId,
-    ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
+    SystemNoteEntry, SystemNoteKind, ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
 };

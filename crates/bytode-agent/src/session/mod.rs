@@ -15,7 +15,8 @@ pub use model::{
     ArtifactId, ArtifactKind, ArtifactRef, AssistantMessageEntry, CompactedEntryView, EntryId,
     EntryMeta, EntrySpan, InteractiveCompactEntry, InteractiveCompactOutcome,
     InteractiveCompactResult, MicroCompactEntry, MicroCompactResult, SessionEntry,
-    SessionEntryKind, SessionId, ToolCallEntry, ToolResultEntry, ToolStatus, UserMessageEntry,
+    SessionEntryKind, SessionId, SystemNoteEntry, SystemNoteKind, ToolCallEntry, ToolResultEntry,
+    ToolStatus, UserMessageEntry,
 };
 pub use runtime::SessionRuntime;
 pub use store::fs::{

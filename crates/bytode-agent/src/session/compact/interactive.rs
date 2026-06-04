@@ -288,6 +288,7 @@ fn entry_excerpt(entry: &SessionEntry, overlay: &CompactOverlay) -> (&'static st
         SessionEntryKind::InteractiveCompact(ic) => {
             ("InteractiveCompact", ic.operation_digest.clone())
         }
+        SessionEntryKind::SystemNote(n) => ("SystemNote", n.content.clone()),
     }
 }
 

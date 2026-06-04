@@ -720,6 +720,8 @@ impl Agent {
                 // Audit-only entries — not shown in conversation history.
                 crate::session::SessionEntryKind::MicroCompact(_)
                 | crate::session::SessionEntryKind::InteractiveCompact(_) => {}
+                // SystemNote restore is wired in a later step.
+                crate::session::SessionEntryKind::SystemNote(_) => {}
             }
         }
         flush_tool_results(&mut history, &mut pending_tool_results);

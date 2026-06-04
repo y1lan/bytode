@@ -53,6 +53,7 @@ pub enum SessionEntryKind {
     ToolResult(ToolResultEntry),
     MicroCompact(MicroCompactEntry),
     InteractiveCompact(InteractiveCompactEntry),
+    SystemNote(SystemNoteEntry),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +89,22 @@ pub struct ToolResultEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolStatus {
     Ok,
+    Error,
+    Cancelled,
+}
+
+/// An out-of-band interaction fact that is not part of the model conversation:
+/// a slash command, a runtime error, or a cancelled turn. Persisted for UI
+/// history restore only — never fed to the provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemNoteEntry {
+    pub kind: SystemNoteKind,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SystemNoteKind {
+    SlashCommand,
     Error,
     Cancelled,
 }
