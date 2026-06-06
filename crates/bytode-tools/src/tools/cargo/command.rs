@@ -2,6 +2,7 @@ use crate::error::{BytodeError, Result};
 use crate::tools::{Tool, ToolAvailability, ToolResult};
 use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -10,6 +11,13 @@ use std::process::Command;
 const WHITELISTED_SUBCOMMANDS: &[&str] = &[
     "check", "build", "test", "clippy", "fmt", "doc", "bench", "run", "clean", "update",
 ];
+
+#[derive(Debug, Deserialize)]
+struct CargoInput {
+    cmd: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
 
 pub struct CargoTool {
     pub project_root: PathBuf,
@@ -25,12 +33,12 @@ impl Tool for CargoTool {
 ALLOWED: check, build, test, clippy, fmt, doc, bench, run, clean, update
 
 EXAMPLES:
-  run_cargo(cmd="check")                          # cargo check
-  run_cargo(cmd="check", args=["--all-targets"])  # cargo check --all-targets
-  run_cargo(cmd="test")                           # cargo test
-  run_cargo(cmd="test", args=["-p", "mypackage"])  # cargo test -p mypackage
-  run_cargo(cmd="build")                          # cargo build
-  run_cargo(cmd="build", args=["--release"])       # cargo build --release
+  cargo(cmd="check")                           # cargo check
+  cargo(cmd="check", args=["--all-targets"])  # cargo check --all-targets
+  cargo(cmd="test")                            # cargo test
+  cargo(cmd="test", args=["-p", "mypackage"]) # cargo test -p mypackage
+  cargo(cmd="build")                           # cargo build
+  cargo(cmd="build", args=["--release"])      # cargo build --release
 
 RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
             provider_id: "builtin",
@@ -66,18 +74,18 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let cmd_name = args["cmd"].as_str().ok_or_else(|| BytodeError::Tool {
+        let input: CargoInput = serde_json::from_value(args).map_err(|e| BytodeError::Tool {
             tool: "cargo".into(),
-            message: "missing 'cmd' argument".into(),
+            message: format!("invalid arguments: {}", e),
         })?;
 
         let whitelist: HashSet<&str> = WHITELISTED_SUBCOMMANDS.iter().copied().collect();
-        if !whitelist.contains(cmd_name) {
+        if !whitelist.contains(input.cmd.as_str()) {
             return Err(BytodeError::Tool {
                 tool: "cargo".into(),
                 message: format!(
                     "subcommand '{}' is not whitelisted. Allowed: {}",
-                    cmd_name,
+                    input.cmd,
                     WHITELISTED_SUBCOMMANDS.join(", ")
                 ),
             });
@@ -85,19 +93,12 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
 
         let mut cmd = Command::new("cargo");
         cmd.current_dir(&self.project_root);
-        cmd.arg(cmd_name);
-
-        if let Some(extra_args) = args["args"].as_array() {
-            for a in extra_args {
-                if let Some(s) = a.as_str() {
-                    cmd.arg(s);
-                }
-            }
-        }
+        cmd.arg(&input.cmd);
+        cmd.args(&input.args);
 
         let output = cmd.output().map_err(|e| BytodeError::Tool {
             tool: "cargo".into(),
-            message: format!("cargo {} failed to start: {}", cmd_name, e),
+            message: format!("cargo {} failed to start: {}", input.cmd, e),
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -112,7 +113,7 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
         }
 
         if content.trim().is_empty() {
-            content = format!("cargo {} completed (no output)", cmd_name);
+            content = format!("cargo {} completed (no output)", input.cmd);
         }
 
         if !output.status.success() {
@@ -123,7 +124,7 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
         }
 
         Ok(ToolResult::Text {
-            source: format!("cargo_{}", cmd_name),
+            source: format!("cargo_{}", input.cmd),
             content,
             truncated: false,
         })

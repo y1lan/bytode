@@ -1,11 +1,18 @@
-use crate::error::Result;
+use crate::error::{BytodeError, Result};
 use crate::lsp::LspClient;
-use crate::tools::check::apply_simple_filter;
+use crate::tools::cargo::apply_simple_filter;
 use crate::tools::{DiagnosticItem, Tool, ToolResult};
 use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
+
+#[derive(Debug, Default, Deserialize)]
+struct DiagnosticsInput {
+    path: Option<String>,
+    filter: Option<String>,
+}
 
 pub struct DiagnosticsTool {
     pub lsp: Arc<LspClient>,
@@ -67,6 +74,12 @@ RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
+        let input: DiagnosticsInput =
+            serde_json::from_value(args).map_err(|e| BytodeError::Tool {
+                tool: "get_diagnostics".into(),
+                message: format!("invalid arguments: {}", e),
+            })?;
+
         if let Err(e) = self.lsp.ensure_started().await {
             return Ok(ToolResult::Text {
                 source: "get_diagnostics".into(),
@@ -78,9 +91,7 @@ RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings
             });
         }
 
-        let path_filter = args["path"].as_str();
-
-        let raw_diags = match path_filter {
+        let raw_diags = match input.path.as_deref() {
             Some(path) => self.lsp.get_cached_diagnostics_for(path).await,
             None => self.lsp.get_cached_diagnostics().await,
         };
@@ -100,16 +111,16 @@ RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings
             })
             .collect();
 
-        if let Some(filter_expr) = args["filter"].as_str() {
+        if let Some(filter_expr) = input.filter {
             let raw_json: Vec<Value> = list
                 .iter()
                 .map(|d| serde_json::to_value(d).unwrap_or(Value::Null))
                 .collect();
 
-            let filtered = apply_simple_filter(&raw_json, filter_expr);
+            let filtered = apply_simple_filter(&raw_json, &filter_expr);
             return Ok(ToolResult::Json {
                 tool: "rust-analyzer".into(),
-                filter: Some(filter_expr.to_string()),
+                filter: Some(filter_expr),
                 count: filtered.len(),
                 data: filtered,
             });

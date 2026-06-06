@@ -2,8 +2,14 @@ use crate::error::{BytodeError, Result};
 use crate::tools::{Tool, ToolResult};
 use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
 use std::process::Command;
+
+#[derive(Debug, Default, Deserialize)]
+struct CheckInput {
+    filter: Option<String>,
+}
 
 pub struct CheckTool {
     pub extra_args: Vec<String>,
@@ -52,11 +58,17 @@ RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }
     fn timeout_ms(&self) -> u64 {
         120_000
     }
+
     fn max_consecutive_calls(&self) -> Option<u32> {
         Some(5)
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
+        let input: CheckInput = serde_json::from_value(args).map_err(|e| BytodeError::Tool {
+            tool: "cargo_check".into(),
+            message: format!("invalid arguments: {}", e),
+        })?;
+
         let mut cmd = Command::new("cargo");
         cmd.args(["check", "--message-format", "json"]);
         cmd.args(&self.extra_args);
@@ -103,13 +115,11 @@ RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }
             })
             .collect();
 
-        let filter = args["filter"].as_str().map(String::from);
-
-        if let Some(ref filter_expr) = filter {
-            let filtered = apply_simple_filter(&raw_diagnostics, filter_expr);
+        if let Some(filter_expr) = input.filter {
+            let filtered = apply_simple_filter(&raw_diagnostics, &filter_expr);
             return Ok(ToolResult::Json {
                 tool: "cargo".into(),
-                filter: Some(filter_expr.clone()),
+                filter: Some(filter_expr),
                 count: filtered.len(),
                 data: filtered,
             });
@@ -124,13 +134,6 @@ RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }
     }
 }
 
-/// Apply a simple filter expression to JSON diagnostic data
-///
-/// Supported:
-///   "errors"   → only items with severity == "error"
-///   "warnings" → only items with severity == "warning"
-///   "length"   → returns [{count: N}] format
-///   ".field == \"value\"" → filter items where field matches
 pub(crate) fn apply_simple_filter(data: &[Value], filter: &str) -> Vec<Value> {
     match filter.trim() {
         "errors" => data
@@ -138,17 +141,13 @@ pub(crate) fn apply_simple_filter(data: &[Value], filter: &str) -> Vec<Value> {
             .filter(|v| v["severity"].as_str() == Some("error"))
             .cloned()
             .collect(),
-
         "warnings" => data
             .iter()
             .filter(|v| v["severity"].as_str() == Some("warning"))
             .cloned()
             .collect(),
-
         "length" => vec![serde_json::json!({ "count": data.len() })],
-
         f if f.starts_with('.') && f.contains("==") => {
-            // Simple field == value filter: .severity == "error"
             let parts: Vec<&str> = f.splitn(2, "==").collect();
             if parts.len() == 2 {
                 let field = parts[0].trim().strip_prefix('.').unwrap_or(parts[0].trim());
@@ -161,7 +160,6 @@ pub(crate) fn apply_simple_filter(data: &[Value], filter: &str) -> Vec<Value> {
                 data.to_vec()
             }
         }
-
         _ => data.to_vec(),
     }
 }

@@ -2,8 +2,14 @@ use crate::error::{BytodeError, Result};
 use crate::tools::{Tool, ToolAvailability, ToolResult};
 use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
 use std::time::Duration;
+
+#[derive(Debug, Deserialize)]
+struct SearchWebInput {
+    query: String,
+}
 
 pub struct SearchWebTool {
     pub timeout_secs: u64,
@@ -21,12 +27,12 @@ WHEN TO USE: For looking up crate docs, error messages, API references, or debug
 not available in the local codebase.
 
 WHEN NOT TO USE: For local code questions — use search_code or read_file.
-For compiler errors — use get_diagnostics or run_cargo(cmd="check").
+For compiler errors — use get_diagnostics or cargo(cmd="check").
 
 EXAMPLES:
-  search_web(query="tokio::sync::Mutex example")     # search for tokio usage
-  search_web(query="rust async trait Send bound")    # search for rust concepts
-  search_web(query="reqwest 0.12 breaking changes")  # search for library docs
+  web_search(query="tokio::sync::Mutex example")     # search for tokio usage
+  web_search(query="rust async trait Send bound")    # search for rust concepts
+  web_search(query="reqwest 0.12 breaking changes")  # search for library docs
 
 RETURNS: Title, URL, and snippet for each result (up to 10)."#,
             provider_id: "builtin",
@@ -56,12 +62,13 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#,
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let query = args["query"].as_str().ok_or_else(|| BytodeError::Tool {
-            tool: "web_search".into(),
-            message: "missing 'query' argument".into(),
-        })?;
+        let input: SearchWebInput =
+            serde_json::from_value(args).map_err(|e| BytodeError::Tool {
+                tool: "web_search".into(),
+                message: format!("invalid arguments: {}", e),
+            })?;
 
-        let query_trimmed = query.trim();
+        let query_trimmed = input.query.trim();
         if query_trimmed.is_empty() {
             return Err(BytodeError::Tool {
                 tool: "web_search".into(),
@@ -119,11 +126,9 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#,
             });
         }
 
-        let content = results.join("\n\n");
-
         Ok(ToolResult::Text {
             source: "web_search".into(),
-            content,
+            content: results.join("\n\n"),
             truncated: false,
         })
     }
@@ -134,21 +139,19 @@ fn urlencoding(s: &str) -> String {
         .map(|c| match c {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
             ' ' => "+".to_string(),
-            other => {
-                let bytes = other.to_string().into_bytes();
-                bytes
-                    .iter()
-                    .map(|b| format!("%{:02X}", b))
-                    .collect::<Vec<_>>()
-                    .join("")
-            }
+            other => other
+                .to_string()
+                .into_bytes()
+                .iter()
+                .map(|b| format!("%{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(""),
         })
         .collect()
 }
 
 fn parse_ddg_html(html: &str) -> Vec<String> {
     let mut results = Vec::new();
-
     let class = "result__body";
     let mut pos = 0;
 
@@ -159,7 +162,6 @@ fn parse_ddg_html(html: &str) -> Vec<String> {
         };
 
         let section_end = html[body_start..].find("</div>").map(|i| body_start + i);
-
         let title = extract_tag_content(html, body_start, "result__title");
         let snippet = extract_tag_content(html, body_start, "result__snippet");
         let link = extract_link(html, body_start);
@@ -240,6 +242,7 @@ fn strip_html(s: &str) -> String {
             _ => {}
         }
     }
+
     let trimmed = result
         .replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -247,13 +250,13 @@ fn strip_html(s: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#x27;", "'")
         .replace("&nbsp;", " ");
-    let collapsed: String = trimmed
+
+    trimmed
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
-        .join(" ");
-    collapsed
+        .join(" ")
 }
 
 impl SearchWebTool {

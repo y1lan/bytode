@@ -21,13 +21,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tools::tools::lsp::DiagnosticsTool;
 use tools::{
     ToolAvailability, ToolEntry, ToolRegistry,
     cargo::CargoTool,
-    check::CheckTool,
-    read_file::ReadFileTool,
+    cargo::CheckTool,
     git::{GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStatusTool},
-    lsp_diag::DiagnosticsTool,
+    read_file::ReadFileTool,
     search_code::SearchTool,
     web::SearchWebTool,
     write_file::WriteFileTool,

@@ -1,7 +1,6 @@
 pub mod cargo;
-pub mod check;
 pub mod git;
-pub mod lsp_diag;
+pub mod lsp;
 pub mod read_file;
 pub mod search_code;
 pub mod web;
