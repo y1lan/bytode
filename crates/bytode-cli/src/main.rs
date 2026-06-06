@@ -25,11 +25,12 @@ use tools::{
     ToolAvailability, ToolEntry, ToolRegistry,
     cargo::CargoTool,
     check::CheckTool,
-    file::{ReadFileTool, WriteFileTool},
+    read_file::ReadFileTool,
     git::{GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStatusTool},
     lsp_diag::DiagnosticsTool,
-    search::SearchTool,
+    search_code::SearchTool,
     web::SearchWebTool,
+    write_file::WriteFileTool,
 };
 use ui::panels::HistoryEntry;
 

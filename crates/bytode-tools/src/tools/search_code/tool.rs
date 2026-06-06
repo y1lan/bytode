@@ -1,3 +1,4 @@
+use super::input::SearchCodeInput;
 use crate::error::{BytodeError, Result};
 use crate::tools::{MatchItem, Tool, ToolResult};
 use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor};
@@ -20,13 +21,13 @@ impl Tool for SearchTool {
             description: r#"Search codebase with ripgrep. Returns structured matches with file:line:column.
 
 WHEN TO USE: Find where a symbol is defined. Find all call sites. Discover patterns across files.
-WHEN NOT TO USE: For build errors → use get_diagnostics. For reading code → use read_file.
-For full text of a file → use read_file.
+WHEN NOT TO USE: For build errors -> use get_diagnostics. For reading code -> use read_file.
+For full text of a file -> use read_file.
 
 EXAMPLES:
-  search_code(pattern="fn main")                                # search entire project
-  search_code(pattern="struct Config", path="/home/user/src")   # search in a directory
-  search_code(pattern="impl.*Handler", path="/home/user/src/")  # regex pattern
+  search_code(pattern="fn main")
+  search_code(pattern="struct Config", path="/home/user/src")
+  search_code(pattern="impl.*Handler", path="/home/user/src/")
 
 Matches are truncated at 200 results. Use a more specific pattern if truncated.
 RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}], truncated }"#,
@@ -39,22 +40,7 @@ RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}
     }
 
     fn parameters_schema(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Ripgrep-compatible regex pattern to search for"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Directory or file to search in. Omit to search entire project.",
-                    "nullable": true
-                }
-            },
-            "required": ["pattern"],
-            "additionalProperties": false
-        })
+        SearchCodeInput::schema()
     }
 
     fn timeout_ms(&self) -> u64 {
@@ -69,64 +55,60 @@ RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}
             truncated,
         } = result
         {
-            let mut s = format!(
+            let mut summary = format!(
                 "  {} match{} for \"{}\"\n",
                 count,
                 if *count == 1 { "" } else { "es" },
                 pattern
             );
-            for m in items.iter().take(5) {
-                let file = m
+            for item in items.iter().take(5) {
+                let file = item
                     .file
                     .replace(&std::env::var("HOME").unwrap_or_default(), "~");
-                s.push_str(&format!(
+                summary.push_str(&format!(
                     "  {}:{} {}...\n",
                     file,
-                    m.line,
-                    m.text.chars().take(60).collect::<String>()
+                    item.line,
+                    item.text.chars().take(60).collect::<String>()
                 ));
             }
             if items.len() > 5 {
-                s.push_str(&format!("  ... and {} more", items.len() - 5));
+                summary.push_str(&format!("  ... and {} more", items.len() - 5));
             }
             if *truncated {
-                s.push_str(" (truncated)");
+                summary.push_str(" (truncated)");
             }
-            Some(s)
+            Some(summary)
         } else {
             None
         }
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        let pattern = args["pattern"].as_str().ok_or_else(|| BytodeError::Tool {
-            tool: "search_code".into(),
-            message: "missing 'pattern'".into(),
-        })?;
-
-        let search_path = args["path"]
-            .as_str()
+        let input = SearchCodeInput::from_value(args)?;
+        let search_path = input
+            .path
             .map(PathBuf::from)
             .unwrap_or_else(|| self.project_root.clone());
-
         let resolved = if search_path.is_absolute() {
             search_path
         } else {
-            self.project_root.join(&search_path)
+            self.project_root.join(search_path)
         };
 
-        let mut cmd = Command::new("rg");
-        cmd.args(["--json", "--line-number", "--no-heading"])
-            .arg(pattern)
+        let mut command = Command::new("rg");
+        command
+            .args(["--json", "--line-number", "--no-heading"])
+            .arg(&input.pattern)
             .arg(&resolved);
 
         for dir in &self.ignore_dirs {
-            cmd.args(["--glob", &format!("!{}", dir)]);
+            command.args(["--glob", &format!("!{}", dir)]);
         }
 
-        let output = cmd.output().map_err(|e| BytodeError::Tool {
+        let output = command.output().map_err(|error| BytodeError::Tool {
             tool: "search_code".into(),
-            message: format!("rg execution failed: {} (is ripgrep installed?)", e),
+            message: format!("rg execution failed: {} (is ripgrep installed?)", error),
         })?;
 
         let raw_items: Vec<Value> = String::from_utf8_lossy(&output.stdout)
@@ -134,29 +116,29 @@ RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect();
 
-        let mut items: Vec<MatchItem> = raw_items
+        let mut items = raw_items
             .iter()
-            .filter(|v| v["type"].as_str() == Some("match"))
-            .filter_map(|v| {
-                let data = &v["data"];
+            .filter(|value| value["type"].as_str() == Some("match"))
+            .filter_map(|value| {
+                let data = &value["data"];
                 Some(MatchItem {
                     file: data["path"]["text"].as_str()?.to_string(),
                     line: data["line_number"].as_u64()? as u32,
                     column: data["absolute_offset"]
                         .as_u64()
-                        .map(|o| o as u32)
+                        .map(|offset| offset as u32)
                         .unwrap_or(0),
                     text: data["lines"]["text"].as_str()?.trim_end().to_string(),
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         let total_count = items.len();
         let truncated = total_count > self.max_results;
         items.truncate(self.max_results);
 
         Ok(ToolResult::Matches {
-            pattern: pattern.to_string(),
+            pattern: input.pattern,
             count: total_count,
             items,
             truncated,

@@ -1,10 +1,11 @@
 pub mod cargo;
 pub mod check;
-pub mod file;
 pub mod git;
 pub mod lsp_diag;
-pub mod search;
+pub mod read_file;
+pub mod search_code;
 pub mod web;
+pub mod write_file;
 
 use crate::ToolDescriptor;
 use crate::error::Result;
