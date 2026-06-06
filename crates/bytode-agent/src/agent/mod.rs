@@ -1,3 +1,4 @@
+pub(crate) mod audit;
 mod compact;
 pub(crate) mod context;
 mod history;
@@ -81,6 +82,8 @@ impl Agent {
         );
 
         let context = ContextBuilder::new(profile, &registry);
+        let tool_call_engine =
+            ToolCallEngine::new(init.session_id.as_str(), init.session_root.clone())?;
         let runtime = SessionRuntime::open(init.session_id, init.session_root)?;
 
         Ok(Agent {
@@ -89,7 +92,7 @@ impl Agent {
             context,
             memory: MemoryLayer::new(),
             runtime,
-            tool_call_engine: ToolCallEngine::new(),
+            tool_call_engine,
             approval_channel: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             forbidden_write_patterns: init.forbidden_write_patterns,
