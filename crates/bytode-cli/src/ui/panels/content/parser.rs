@@ -16,12 +16,13 @@ pub(crate) fn parse_assistant_message(
             flush_text_buffer(&mut text_buf, &mut parts);
 
             let mut body = Vec::new();
+            let tool_name = tool_name_from_summary(&tool_summary);
             while let Some(next) = lines.peek() {
                 if parse_tool_header(next).is_some() || parse_reasoning_header(next).is_some() {
                     break;
                 }
 
-                if !is_tool_body_line(next) {
+                if !is_tool_body_line(next, &tool_name) {
                     break;
                 }
 
@@ -40,7 +41,7 @@ pub(crate) fn parse_assistant_message(
                 .unwrap_or(false);
 
             parts.push(AssistantPart::Tool(ToolPart {
-                name: tool_name_from_summary(&tool_summary),
+                name: tool_name,
                 summary: tool_summary,
                 body: joined_body,
                 state,
@@ -184,8 +185,15 @@ fn classify_tool_state(
     ToolState::Completed
 }
 
-fn is_tool_body_line(line: &str) -> bool {
-    line.trim().is_empty() || line.starts_with("   ") || line.starts_with('\t')
+fn is_tool_body_line(line: &str, tool_name: &str) -> bool {
+    line.trim().is_empty()
+        || line.starts_with("   ")
+        || line.starts_with('\t')
+        || (tool_name == "write_file" && is_diff_like_line(line))
+}
+
+fn is_diff_like_line(line: &str) -> bool {
+    line.starts_with('+') || line.starts_with('-')
 }
 
 fn normalize_tool_body_line(line: &str) -> String {
