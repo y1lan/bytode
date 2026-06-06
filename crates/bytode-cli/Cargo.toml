@@ -8,6 +8,7 @@ bytode-agent = { path = "../bytode-agent" }
 bytode-common = { path = "../bytode-common" }
 bytode-llm = { path = "../bytode-llm" }
 bytode-lsp = { path = "../bytode-lsp" }
+bytode-mcp = { path = "../bytode-mcp" }
 bytode-tools = { path = "../bytode-tools" }
 clap.workspace = true
 crossterm.workspace = true

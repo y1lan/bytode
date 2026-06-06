@@ -29,6 +29,7 @@ EXAMPLES:
 
 RETURNS: git status --porcelain output, or "clean" if no changes."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::VcsRead],
             default_risk: RiskLevel::Low,

@@ -1,5 +1,6 @@
 use crate::error::{BytodeError, Result};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Tool selection policy
@@ -21,6 +22,7 @@ pub struct RawConfig {
     pub project: Option<RawProjectConfig>,
     pub build: Option<RawBuildConfig>,
     pub tools: Option<RawToolsConfig>,
+    pub mcp: Option<RawMcpConfig>,
     pub agent: Option<RawAgentConfig>,
     pub security: Option<RawSecurityConfig>,
 }
@@ -142,6 +144,48 @@ pub struct RawSecurityConfig {
     pub forbidden_write_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RawMcpConfig {
+    #[serde(default)]
+    pub servers: BTreeMap<String, RawMcpServerConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawMcpServerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub transport: Option<String>,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    pub url: Option<String>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default = "default_mcp_timeout")]
+    pub timeout_secs: u64,
+}
+
+impl Default for RawMcpServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            transport: None,
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            url: None,
+            headers: BTreeMap::new(),
+            timeout_secs: default_mcp_timeout(),
+        }
+    }
+}
+
+fn default_mcp_timeout() -> u64 {
+    30
+}
+
 fn default_max_file_size() -> u64 {
     1_048_576
 }
@@ -158,6 +202,7 @@ pub struct Config {
     pub agent: AgentConfig,
     pub security: SecurityConfig,
     pub build: BuildConfig,
+    pub mcp: McpConfig,
     pub tools: ToolSelection,
 }
 
@@ -195,6 +240,31 @@ pub struct WebSearchConfig {
 #[derive(Debug, Clone)]
 pub struct CargoConfig {
     pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct McpConfig {
+    pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpServerConfig {
+    pub enabled: bool,
+    pub transport: McpTransportConfig,
+    pub timeout_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum McpTransportConfig {
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+    },
+    Sse {
+        url: String,
+        headers: BTreeMap<String, String>,
+    },
 }
 
 impl Config {
@@ -264,6 +334,13 @@ impl Config {
             self.web_search.proxy = t.web_search.proxy;
             self.cargo.timeout_ms = t.cargo.timeout_ms;
         }
+        if let Some(mcp) = raw.mcp {
+            for (name, server) in mcp.servers {
+                if let Some(config) = mcp_server_config(server) {
+                    self.mcp.servers.insert(name, config);
+                }
+            }
+        }
         if let Some(a) = raw.agent {
             self.agent = AgentConfig {
                 confirm_before_write: a.confirm_before_write,
@@ -317,9 +394,31 @@ impl Default for Config {
             build: BuildConfig {
                 extra_check_flags: vec!["--all-targets".into()],
             },
+            mcp: McpConfig::default(),
             tools: ToolSelection::None,
         }
     }
+}
+
+fn mcp_server_config(raw: RawMcpServerConfig) -> Option<McpServerConfig> {
+    let transport = match raw.transport.as_deref() {
+        Some("stdio") | None if raw.command.is_some() => McpTransportConfig::Stdio {
+            command: raw.command?,
+            args: raw.args,
+            env: raw.env,
+        },
+        Some("sse") | Some("http") | None if raw.url.is_some() => McpTransportConfig::Sse {
+            url: raw.url?,
+            headers: raw.headers,
+        },
+        _ => return None,
+    };
+
+    Some(McpServerConfig {
+        enabled: raw.enabled,
+        transport,
+        timeout_secs: raw.timeout_secs,
+    })
 }
 
 fn user_config_path() -> Option<PathBuf> {

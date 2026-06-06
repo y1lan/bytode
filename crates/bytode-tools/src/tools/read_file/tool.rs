@@ -31,6 +31,7 @@ EXAMPLES:
 RETURNS: For files: { "type": "file", path, content (with line numbers), line_count, total_bytes }.
 For directories: { "type": "text", path, content (tree listing with sizes and types) }."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::ReadProjectFile],
             default_risk: RiskLevel::Low,

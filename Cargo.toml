@@ -4,6 +4,7 @@ members = [
     "crates/bytode-llm",
     "crates/bytode-lsp",
     "crates/bytode-tools",
+    "crates/bytode-mcp",
     "crates/bytode-agent",
     "crates/bytode-cli",
 ]

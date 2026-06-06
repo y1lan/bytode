@@ -36,6 +36,7 @@ EXAMPLES:
 
 RETURNS: push output from git."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::Modification,
             capabilities: vec![ToolCapability::VcsWrite, ToolCapability::NetworkAccess],
             default_risk: RiskLevel::Critical,

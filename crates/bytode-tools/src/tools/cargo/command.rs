@@ -42,6 +42,7 @@ EXAMPLES:
 
 RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::Build,
             capabilities: vec![ToolCapability::RunBuild, ToolCapability::RunProjectCommand],
             default_risk: RiskLevel::High,

@@ -113,6 +113,7 @@ mod tests {
             name: "mock_tool",
             description: "mock tool",
             provider_id: "test",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::ReadProjectFile],
             default_risk: RiskLevel::Low,

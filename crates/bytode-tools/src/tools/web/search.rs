@@ -36,6 +36,7 @@ EXAMPLES:
 
 RETURNS: Title, URL, and snippet for each result (up to 10)."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::NetworkAccess],
             default_risk: RiskLevel::Medium,

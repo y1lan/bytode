@@ -33,6 +33,7 @@ EXAMPLES:
 
 RETURNS: commit summary (hash + message) or error if nothing to commit."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::Modification,
             capabilities: vec![ToolCapability::VcsWrite],
             default_risk: RiskLevel::High,

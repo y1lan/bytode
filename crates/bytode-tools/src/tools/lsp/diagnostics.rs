@@ -42,6 +42,7 @@ DO NOT:
 
 RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings, list: [{file, line, column, severity, message, code}] }"#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::ReadDiagnostics],
             default_risk: RiskLevel::Low,

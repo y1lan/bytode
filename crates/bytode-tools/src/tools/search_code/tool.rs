@@ -32,6 +32,7 @@ EXAMPLES:
 Matches are truncated at 200 results. Use a more specific pattern if truncated.
 RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}], truncated }"#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::SearchProject],
             default_risk: RiskLevel::Low,

@@ -33,6 +33,7 @@ Supported filter operations:
 
 RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }"#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::Build,
             capabilities: vec![ToolCapability::RunBuild],
             default_risk: RiskLevel::Medium,

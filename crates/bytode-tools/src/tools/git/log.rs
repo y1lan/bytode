@@ -32,6 +32,7 @@ EXAMPLES:
 
 RETURNS: one line per commit (short hash + message)."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::VcsRead],
             default_risk: RiskLevel::Low,

@@ -32,6 +32,7 @@ EXAMPLES:
 
 RETURNS: unified diff output."#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::ReadOnly,
             capabilities: vec![ToolCapability::VcsRead],
             default_risk: RiskLevel::Medium,

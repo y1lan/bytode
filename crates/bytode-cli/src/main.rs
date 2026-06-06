@@ -7,6 +7,7 @@ pub use bytode_agent as agent;
 pub use bytode_common::{config, error, project};
 pub use bytode_llm as llm;
 pub use bytode_lsp as lsp;
+pub use bytode_mcp as mcp;
 pub use bytode_tools as tools;
 
 use agent::{Agent, AgentInit, InteractiveApprovalChannel};
@@ -69,11 +70,12 @@ async fn main() -> Result<()> {
         web_timeout_secs: config.web_search.timeout_secs,
         web_proxy: config.web_search.proxy.clone(),
     };
-    let providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(BuiltinToolProvider::new(
+    let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(BuiltinToolProvider::new(
         project_root.clone(),
         builtin_config,
         Some(lsp_client.clone()),
     ))];
+    providers.extend(mcp::McpToolProvider::from_config(&config.mcp).await?);
     let registry = ToolRegistry::from_providers(providers);
     let (enabled_set, disabled_set, is_exact) = match &config.tools {
         config::ToolSelection::Exact { enabled } => {

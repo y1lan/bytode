@@ -10,4 +10,5 @@ pub enum ToolCapability {
     VcsRead,
     VcsWrite,
     SessionState,
+    UnknownExternal,
 }

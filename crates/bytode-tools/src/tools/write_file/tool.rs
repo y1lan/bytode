@@ -28,6 +28,7 @@ WHEN NOT TO USE: For reading — use read_file. For searching — use search_cod
 SAFETY: Writes are atomic (tmp file + rename). Path must be within project root.
 RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#,
             provider_id: "builtin",
+            provider_meta: None,
             category: ToolCategory::Modification,
             capabilities: vec![ToolCapability::WriteProjectFile],
             default_risk: RiskLevel::High,
