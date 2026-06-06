@@ -191,6 +191,7 @@ name = "bytode-agent"
 version = "0.1.0"
 dependencies = [
  "async-openai",
+ "async-trait",
  "bytode-common",
  "bytode-llm",
  "bytode-tools",

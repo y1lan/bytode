@@ -1,15 +1,15 @@
-use super::{Agent, AgentMode, AgentOutput, memory, tool_calls::format_args};
+use super::{Agent, AgentMode, AgentOutput, memory, tool_calls::ToolCallContext};
+use crate::agent::context::format_tool_result;
 use crate::error::Result;
-use crate::llm::{LlmOutput, ToolCall};
+use crate::llm::LlmOutput;
+use crate::session::ToolStatus;
 use crate::session::compact::kind_for_tool;
 use crate::session::conversation::{
     CanonicalAssistantPart, CanonicalAssistantResponse, CanonicalContent, CanonicalMessageId,
     CanonicalRecord, CanonicalRecordKind, CanonicalToolResultPart, CanonicalToolResults,
     CanonicalToolStatus as CcToolStatus, ResponseId, ToolCallId, TurnId,
 };
-use crate::session::ToolStatus;
 use crate::tools::ToolResult;
-use crate::agent::context::format_tool_result;
 use std::sync::atomic::Ordering;
 
 impl Agent {
@@ -157,9 +157,7 @@ impl Agent {
                     for (i, call) in calls.iter().enumerate() {
                         let tool_name = call.name.clone();
                         let tool_args = call.arguments.clone();
-
-                        let args_summary = format_args(&call.name, &call.arguments);
-                        on_text(&format!("\n  ⟳ {}({})\n", tool_name, args_summary));
+                        on_text(&format!("\n  ⟳ {}()\n", tool_name));
 
                         let call_entry_id = self.runtime.record_tool_call(
                             &tool_name,
@@ -168,49 +166,41 @@ impl Agent {
                             tool_args.clone(),
                             None,
                         )?;
-                        let tool_ref = self.registry.find(&call.name);
+                        let outcome = {
+                            let engine_context = ToolCallContext {
+                                registry: &self.registry,
+                                mode: self.mode,
+                                profile: &self.profile,
+                                forbidden_write_patterns: &self.forbidden_write_patterns,
+                                approval_channel: self.approval_channel.clone(),
+                            };
 
-                        let (result, status) = match self.execute_tool(call).await {
-                            Ok(r) => {
-                                if let Some(tool) = tool_ref {
-                                    if let Some(display) = tool.format_result_for_display(&r) {
-                                        on_text(&format!("{}\n", display));
-                                    } else {
-                                        on_text("  ok\n");
-                                    }
-                                }
-                                (r, ToolStatus::Ok)
-                            }
-                            Err(e) => {
-                                let msg = format!("Error: {}", e);
-                                tracing::error!(tool = %call.name, args = %call.arguments, error = %e, "Tool call failed");
-                                on_text(&format!("{}\n", msg));
-                                consecutive_errors += 1;
-                                let result = ToolResult::Text {
-                                    source: "tool_error".into(),
-                                    content: msg,
-                                    truncated: false,
-                                };
-                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                    self.record_tool_result(
-                                        call_entry_id,
-                                        &tool_name,
-                                        &result,
-                                        ToolStatus::Error,
-                                    )?;
-                                    return Ok(AgentOutput::Text(
-                                        "Too many consecutive tool errors. Stopping.".into(),
-                                    ));
-                                }
-                                (result, ToolStatus::Error)
-                            }
+                            self.tool_call_engine
+                                .execute(&engine_context, &turn_id.0, i, call)
+                                .await
                         };
+                        on_text(&format!("{}\n", outcome.display));
+
+                        if outcome.counts_as_error {
+                            consecutive_errors += 1;
+                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                self.record_tool_result(
+                                    call_entry_id,
+                                    &tool_name,
+                                    &outcome.result,
+                                    ToolStatus::Error,
+                                )?;
+                                return Ok(AgentOutput::Text(
+                                    "Too many consecutive tool errors. Stopping.".into(),
+                                ));
+                            }
+                        }
 
                         self.record_tool_result(
                             call_entry_id,
                             &tool_name,
-                            &result,
-                            status.clone(),
+                            &outcome.result,
+                            outcome.status,
                         )?;
 
                         let tc_id = if let Some(part) = cc_parts.get(i) {
@@ -224,13 +214,14 @@ impl Agent {
                             ToolCallId(format!("fallback-{}", i))
                         };
 
-                        let cc_status = match status {
+                        let cc_status = match outcome.status {
                             ToolStatus::Ok => CcToolStatus::Ok,
                             ToolStatus::Error => CcToolStatus::Error,
                             ToolStatus::Cancelled => CcToolStatus::Cancelled,
                         };
 
-                        let cc_content = CanonicalContent::Inline(format_tool_result(&result));
+                        let cc_content =
+                            CanonicalContent::Inline(format_tool_result(&outcome.result));
 
                         cc_results.push(CanonicalToolResultPart {
                             tool_call_id: tc_id,
@@ -243,11 +234,11 @@ impl Agent {
                                 id: call.id.clone(),
                                 name: tool_name,
                                 arguments: tool_args,
-                                result: result.clone(),
+                                result: outcome.result.clone(),
                             });
                         }
 
-                        self.context.update_last_result(&result);
+                        self.context.update_last_result(&outcome.result);
                     }
 
                     {
@@ -285,25 +276,5 @@ impl Agent {
         self.runtime
             .record_tool_result(call_entry_id, None, status, kind, &content)?;
         Ok(())
-    }
-
-    async fn execute_tool(&self, call: &ToolCall) -> Result<ToolResult> {
-        let tool =
-            self.registry
-                .find(&call.name)
-                .ok_or_else(|| crate::error::BytodeError::Tool {
-                    tool: call.name.clone(),
-                    message: "unknown tool".into(),
-                })?;
-
-        let timeout = tokio::time::Duration::from_millis(tool.timeout_ms());
-        let result = tokio::time::timeout(timeout, tool.execute(call.arguments.clone()))
-            .await
-            .map_err(|_| crate::error::BytodeError::Tool {
-                tool: call.name.clone(),
-                message: "timeout".into(),
-            })??;
-
-        Ok(result)
     }
 }

@@ -206,6 +206,35 @@ impl AppShell {
         self.input_panel_mut().set_notice("interrupt requested");
     }
 
+    pub fn begin_tool_approval(&mut self, turn_id: TurnId, request_id: String, summary: String) {
+        self.exec_state = ExecState::AwaitingApproval {
+            turn_id,
+            request: crate::ui::events::ApprovalPrompt {
+                request_id,
+                summary: summary.clone(),
+            },
+        };
+        self.runtime.status.task = task_label(&self.exec_state).to_string();
+        self.overlays.open(OverlayState {
+            id: OverlayId::Dialog,
+            title: "Approval Required".into(),
+            body: format!("Approve tool call:\n\n{summary}\n\nCtrl+Y approve\nCtrl+N reject"),
+            z_index: 10,
+            slot: WindowSlot::Center,
+            modal: true,
+            capture: true,
+        });
+    }
+
+    pub fn resolve_tool_approval(&mut self) {
+        if let ExecState::AwaitingApproval { turn_id, .. } = self.exec_state {
+            self.exec_state = ExecState::Streaming { turn_id };
+            self.runtime.status.task = task_label(&self.exec_state).to_string();
+            self.overlays.close(OverlayId::Dialog);
+            self.input_panel_mut().clear_notice();
+        }
+    }
+
     pub fn apply_slash_command(&mut self, command: &str, agent: &mut Agent) -> Vec<Effect> {
         self.content_panel_mut().push_user(command.to_string());
         // Persist the slash command so it is restored in history after a restart.
@@ -344,17 +373,11 @@ impl AppShell {
                 self.show_notice(format!("content view {:?} not implemented", view));
             }
             Effect::ApproveTool(request) => {
-                self.overlays.open(OverlayState {
-                    id: OverlayId::Dialog,
-                    title: "Approval".into(),
-                    body: format!("Approval requested for:\n\n{request}\n\nPress Enter to close."),
-                    z_index: 10,
-                    slot: WindowSlot::Center,
-                    modal: true,
-                    capture: true,
-                });
+                self.show_notice(format!("approved: {}", request.summary));
             }
-            Effect::RejectTool(request) => self.show_notice(format!("rejected: {request}")),
+            Effect::RejectTool(request) => {
+                self.show_notice(format!("rejected: {}", request.summary));
+            }
             Effect::SaveSession
             | Effect::RestoreTerminal
             | Effect::Exit
@@ -373,6 +396,15 @@ impl AppShell {
     }
 
     fn route_global_key(&mut self, key: &KeyAction) -> Option<Vec<Effect>> {
+        if let ExecState::AwaitingApproval { request, .. } = &self.exec_state {
+            if *key == KeyAction::CtrlY {
+                return Some(vec![Effect::ApproveTool(request.clone())]);
+            }
+            if *key == KeyAction::CtrlN {
+                return Some(vec![Effect::RejectTool(request.clone())]);
+            }
+        }
+
         match key {
             KeyAction::CtrlD => {
                 if self.exec_state.is_busy() {
@@ -590,7 +622,7 @@ fn task_label(exec_state: &ExecState) -> &'static str {
 }
 
 fn help_overlay_text() -> &'static str {
-    "Ctrl+D  exit\nCtrl+C  cancel intent\nCtrl+T  toggle sidebar\nCtrl+/  toggle help\nTab     next focus\nShift+Tab previous focus\n\nInput:\nEnter submit\nShift+Enter newline\nCtrl+A/Ctrl+E move\nCtrl+U clear\n\nContent:\nUp/Down scroll\nPageUp/PageDown page\nHome top\nEnd bottom"
+    "Ctrl+D  exit\nCtrl+C  cancel intent\nCtrl+T  toggle sidebar\nCtrl+/  toggle help\nCtrl+Y  approve tool\nCtrl+N  reject tool\nTab     next focus\nShift+Tab previous focus\n\nInput:\nEnter submit\nShift+Enter newline\nCtrl+A/Ctrl+E move\nCtrl+U clear\n\nContent:\nUp/Down scroll\nPageUp/PageDown page\nHome top\nEnd bottom"
 }
 
 #[cfg(test)]

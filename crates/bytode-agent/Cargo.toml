@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 async-openai.workspace = true
+async-trait.workspace = true
 bytode-common = { path = "../bytode-common" }
 bytode-llm = { path = "../bytode-llm" }
 bytode-tools = { path = "../bytode-tools" }

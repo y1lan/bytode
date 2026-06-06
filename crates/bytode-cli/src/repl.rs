@@ -1,4 +1,4 @@
-use crate::agent::Agent;
+use crate::agent::{Agent, ApprovalEvent, InteractiveApprovalChannel};
 use crate::project::ProjectProfile;
 use crate::ui::Terminal;
 use crate::ui::app_shell::AppShell;
@@ -13,6 +13,8 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 pub async fn run(
     agent: Agent,
+    approval_channel: Arc<InteractiveApprovalChannel>,
+    approval_rx: mpsc::UnboundedReceiver<ApprovalEvent>,
     profile: &ProjectProfile,
     git_branch: Option<String>,
     git_dirty: bool,
@@ -21,6 +23,8 @@ pub async fn run(
 ) -> Agent {
     std::panic::AssertUnwindSafe(run_inner(
         agent,
+        approval_channel,
+        approval_rx,
         profile,
         git_branch,
         git_dirty,
@@ -43,6 +47,8 @@ struct StreamEvent {
 
 async fn run_inner(
     agent: Agent,
+    approval_channel: Arc<InteractiveApprovalChannel>,
+    mut approval_rx: mpsc::UnboundedReceiver<ApprovalEvent>,
     profile: &ProjectProfile,
     git_branch: Option<String>,
     git_dirty: bool,
@@ -80,6 +86,7 @@ async fn run_inner(
             &mut shell,
             frame_area,
             &mut agent_opt,
+            &approval_channel,
             &mut rx,
             &mut turn_handle,
             &mut active_cancel,
@@ -133,6 +140,17 @@ async fn run_inner(
                     }
                 }
             }
+            approval = approval_rx.recv() => {
+                if let Some(event) = approval
+                    && let Some(turn_id) = shell.active_turn_id()
+                {
+                    shell.begin_tool_approval(
+                        turn_id,
+                        event.request.id,
+                        event.request.summary,
+                    );
+                }
+            }
             _ = tokio::time::sleep(std::time::Duration::from_millis(16)) => {}
         }
     }
@@ -142,6 +160,7 @@ fn process_key_actions_for_budget(
     shell: &mut AppShell,
     frame_area: Option<ratatui::layout::Rect>,
     agent_opt: &mut Option<Agent>,
+    approval_channel: &Arc<InteractiveApprovalChannel>,
     rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>,
     turn_handle: &mut Option<tokio::task::JoinHandle<(TurnId, Agent, Option<String>)>>,
     active_cancel: &mut Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -183,6 +202,7 @@ fn process_key_actions_for_budget(
             effects,
             shell,
             agent_opt,
+            approval_channel,
             rx,
             turn_handle,
             active_cancel,
@@ -202,6 +222,7 @@ fn apply_effects(
     effects: Vec<Effect>,
     shell: &mut AppShell,
     agent_opt: &mut Option<Agent>,
+    approval_channel: &Arc<InteractiveApprovalChannel>,
     rx: &mut Option<mpsc::UnboundedReceiver<StreamEvent>>,
     turn_handle: &mut Option<tokio::task::JoinHandle<(TurnId, Agent, Option<String>)>>,
     active_cancel: &mut Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -254,9 +275,15 @@ fn apply_effects(
                     }
                 }
             }
-            Effect::ApproveTool(_)
-            | Effect::RejectTool(_)
-            | Effect::SwitchContentView(_)
+            Effect::ApproveTool(request) => {
+                let _ = approval_channel.approve(&request.request_id);
+                shell.resolve_tool_approval();
+            }
+            Effect::RejectTool(request) => {
+                let _ = approval_channel.reject(&request.request_id, "rejected by user".into());
+                shell.resolve_tool_approval();
+            }
+            Effect::SwitchContentView(_)
             | Effect::OpenOverlay(_)
             | Effect::CloseOverlay(_)
             | Effect::SaveSession

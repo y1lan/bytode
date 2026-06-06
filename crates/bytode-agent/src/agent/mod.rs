@@ -1,10 +1,12 @@
+mod compact;
 pub(crate) mod context;
+mod history;
 pub(crate) mod memory;
 pub(crate) mod provider_adapter;
-mod compact;
-mod history;
 mod tool_calls;
 mod turn;
+
+pub use tool_calls::{ApprovalEvent, InteractiveApprovalChannel};
 
 use crate::error::Result;
 use crate::llm::DeepSeekClient;
@@ -19,6 +21,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tool_calls::{ApprovalChannel, ToolCallEngine};
 
 pub struct Agent {
     llm: DeepSeekClient,
@@ -26,7 +29,10 @@ pub struct Agent {
     context: ContextBuilder,
     memory: MemoryLayer,
     runtime: SessionRuntime,
+    tool_call_engine: ToolCallEngine,
+    approval_channel: Option<Arc<dyn ApprovalChannel>>,
     cancelled: Arc<AtomicBool>,
+    forbidden_write_patterns: Vec<String>,
     primary_language: String,
     detected_languages: HashSet<String>,
     base_enabled: HashSet<String>,
@@ -35,6 +41,15 @@ pub struct Agent {
     mode: AgentMode,
     profile: ProjectProfile,
     compact: Option<InteractiveCompactState>,
+}
+
+pub struct AgentInit<'a> {
+    pub enabled: &'a HashSet<String>,
+    pub disabled: &'a HashSet<String>,
+    pub is_exact: bool,
+    pub session_id: SessionId,
+    pub session_root: PathBuf,
+    pub forbidden_write_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,11 +64,7 @@ impl Agent {
         llm: DeepSeekClient,
         mut registry: ToolRegistry,
         profile: &ProjectProfile,
-        enabled: &HashSet<String>,
-        disabled: &HashSet<String>,
-        is_exact: bool,
-        session_id: SessionId,
-        session_root: PathBuf,
+        init: AgentInit<'_>,
     ) -> Result<Self> {
         let primary_lang = profile.primary.to_str();
         let detected: HashSet<String> = profile
@@ -61,10 +72,16 @@ impl Agent {
             .iter()
             .map(|l| l.to_str().to_string())
             .collect();
-        registry.activate_for(primary_lang, &detected, enabled, disabled, is_exact);
+        registry.activate_for(
+            primary_lang,
+            &detected,
+            init.enabled,
+            init.disabled,
+            init.is_exact,
+        );
 
         let context = ContextBuilder::new(profile, &registry);
-        let runtime = SessionRuntime::open(session_id, session_root)?;
+        let runtime = SessionRuntime::open(init.session_id, init.session_root)?;
 
         Ok(Agent {
             llm,
@@ -72,12 +89,15 @@ impl Agent {
             context,
             memory: MemoryLayer::new(),
             runtime,
+            tool_call_engine: ToolCallEngine::new(),
+            approval_channel: None,
             cancelled: Arc::new(AtomicBool::new(false)),
+            forbidden_write_patterns: init.forbidden_write_patterns,
             primary_language: primary_lang.to_string(),
             detected_languages: detected,
-            base_enabled: enabled.clone(),
-            base_disabled: disabled.clone(),
-            is_exact,
+            base_enabled: init.enabled.clone(),
+            base_disabled: init.disabled.clone(),
+            is_exact: init.is_exact,
             mode: AgentMode::Normal,
             profile: profile.clone(),
             compact: None,
@@ -90,6 +110,10 @@ impl Agent {
 
     pub fn reset_cancelled(&self) {
         self.cancelled.store(false, Ordering::Relaxed);
+    }
+
+    pub fn set_approval_channel(&mut self, channel: Arc<dyn ApprovalChannel>) {
+        self.approval_channel = Some(channel);
     }
 
     /// Persist an out-of-band interaction note (slash command, error) so it is
@@ -141,10 +165,10 @@ impl Agent {
         let mut messages = ProviderAdapter::adapt(&cc)?;
         messages.insert(
             0,
-            crate::llm::build_system_message(&self.context.core_prompt()),
+            crate::llm::build_system_message(self.context.core_prompt()),
         );
         if sop_needed {
-            messages.push(crate::llm::build_system_message(&self.context.sop_prompt()));
+            messages.push(crate::llm::build_system_message(self.context.sop_prompt()));
         }
         Ok(messages)
     }

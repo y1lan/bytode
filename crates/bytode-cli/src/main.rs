@@ -9,7 +9,7 @@ pub use bytode_llm as llm;
 pub use bytode_lsp as lsp;
 pub use bytode_tools as tools;
 
-use agent::Agent;
+use agent::{Agent, AgentInit, InteractiveApprovalChannel};
 use clap::Parser;
 use config::Config;
 use error::Result;
@@ -188,11 +188,14 @@ async fn main() -> Result<()> {
         llm,
         registry,
         &profile,
-        &enabled_set,
-        &disabled_set,
-        is_exact,
-        session_id,
-        session_root,
+        AgentInit {
+            enabled: &enabled_set,
+            disabled: &disabled_set,
+            is_exact,
+            session_id,
+            session_root,
+            forbidden_write_patterns: config.security.forbidden_write_patterns.clone(),
+        },
     )?;
 
     // Restore conversation history from the session log.
@@ -228,8 +231,12 @@ async fn main() -> Result<()> {
             println!();
         }
         None => {
+            let (approval_channel, approval_rx) = InteractiveApprovalChannel::new();
+            agent.set_approval_channel(approval_channel.clone());
             repl::run(
                 agent,
+                approval_channel,
+                approval_rx,
                 &profile,
                 git_branch,
                 git_dirty,

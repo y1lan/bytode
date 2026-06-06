@@ -5,6 +5,12 @@ use crossterm::event::{
 
 pub type TurnId = u64;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApprovalPrompt {
+    pub request_id: String,
+    pub summary: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PanelId {
     Content,
@@ -85,6 +91,8 @@ pub enum KeyAction {
     CtrlSlash,
     CtrlT,
     CtrlU,
+    CtrlY,
+    CtrlN,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +155,12 @@ impl KeyAction {
             }
             KeyCode::Char('t') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::CtrlT)
+            }
+            KeyCode::Char('y') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlY)
+            }
+            KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::CtrlN)
             }
             KeyCode::Char(ch)
                 if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT =>
@@ -215,7 +229,7 @@ pub enum ExecState {
     },
     AwaitingApproval {
         turn_id: TurnId,
-        request: String,
+        request: ApprovalPrompt,
     },
     ToolRunning {
         turn_id: TurnId,
@@ -252,8 +266,8 @@ pub enum Effect {
     Exit,
     StartTurn { turn_id: TurnId, input: String },
     CancelTurn(TurnId),
-    ApproveTool(String),
-    RejectTool(String),
+    ApproveTool(ApprovalPrompt),
+    RejectTool(ApprovalPrompt),
     SwitchContentView(ContentView),
     OpenOverlay(OverlayState),
     CloseOverlay(OverlayId),

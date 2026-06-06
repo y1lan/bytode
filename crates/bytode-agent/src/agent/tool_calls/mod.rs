@@ -1,6 +1,19 @@
+mod approval;
+mod context;
+mod engine;
+mod outcome;
+mod policy;
+mod request;
+
+pub use approval::{ApprovalChannel, ApprovalEvent, InteractiveApprovalChannel};
+pub use context::ToolCallContext;
+pub use engine::ToolCallEngine;
+pub use outcome::ToolCallOutcome;
+pub use request::ToolCallRequest;
+
 use serde_json::Value;
 
-pub(super) fn format_args(tool_name: &str, args: &Value) -> String {
+pub fn format_args(tool_name: &str, args: &Value) -> String {
     match tool_name {
         "read_file" => {
             let path = args["path"].as_str().unwrap_or("?");
