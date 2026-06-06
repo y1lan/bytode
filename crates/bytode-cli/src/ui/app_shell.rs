@@ -100,6 +100,14 @@ impl AppShell {
     }
 
     pub fn dispatch_key(&mut self, key: KeyAction) -> Vec<Effect> {
+        if matches!(self.exec_state, ExecState::AwaitingApproval { .. })
+            && matches!(key, KeyAction::CtrlY | KeyAction::CtrlN)
+        {
+            if let Some(effects) = self.route_global_key(&key) {
+                return effects;
+            }
+        }
+
         if let Some(effects) = self.overlays.handle_modal_key(key.clone()) {
             return effects;
         }
@@ -680,6 +688,33 @@ mod tests {
         let effects = shell.dispatch_key(KeyAction::CtrlT);
         assert!(effects.is_empty());
         assert!(!shell.sidebar_visible);
+    }
+
+    #[test]
+    fn approval_shortcuts_bypass_modal_overlay_block() {
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        shell.begin_tool_approval(7, "req-1".into(), "write_file(path=src/main.rs)".into());
+
+        let approve = shell.dispatch_key(KeyAction::CtrlY);
+        assert_eq!(
+            approve,
+            vec![Effect::ApproveTool(crate::ui::events::ApprovalPrompt {
+                request_id: "req-1".into(),
+                summary: "write_file(path=src/main.rs)".into(),
+            })]
+        );
+
+        let mut shell = AppShell::new(&profile(), None, false, "auto", Vec::new());
+        shell.begin_tool_approval(8, "req-2".into(), "cargo(cmd=test)".into());
+
+        let reject = shell.dispatch_key(KeyAction::CtrlN);
+        assert_eq!(
+            reject,
+            vec![Effect::RejectTool(crate::ui::events::ApprovalPrompt {
+                request_id: "req-2".into(),
+                summary: "cargo(cmd=test)".into(),
+            })]
+        );
     }
 
     #[test]
