@@ -632,7 +632,9 @@ mod tests {
                 results: vec![CanonicalToolResultPart {
                     tool_call_id: ToolCallId("call_1".into()),
                     status: CanonicalToolStatus::Ok,
-                    content: CanonicalContent::Inline("very long content that should disappear".into()),
+                    content: CanonicalContent::Inline(
+                        "very long content that should disappear".into(),
+                    ),
                 }],
             }),
             CanonicalRecordKind::ToolResultCompacted(CanonicalToolResultCompacted {
@@ -654,7 +656,10 @@ mod tests {
             tool_msg.get("tool_call_id").and_then(|v| v.as_str()),
             Some("call_1")
         );
-        assert_eq!(tool_msg.get("content").and_then(|v| v.as_str()), Some("preview only"));
+        assert_eq!(
+            tool_msg.get("content").and_then(|v| v.as_str()),
+            Some("preview only")
+        );
     }
 
     #[test]
@@ -715,6 +720,9 @@ mod tests {
                     .to_string()
             })
             .collect();
-        assert_eq!(contents, vec!["compressed summary", "new task", "new answer"]);
+        assert_eq!(
+            contents,
+            vec!["compressed summary", "new task", "new answer"]
+        );
     }
 }

@@ -29,8 +29,10 @@ pub fn build_canonical_context(records: &[CanonicalRecord]) -> Result<CanonicalC
             _ => None,
         })
         .collect();
-    let mut compacted_tool_results: HashMap<(TurnId, ResponseId, ToolCallId), (u64, &CanonicalToolResultCompacted)> =
-        HashMap::new();
+    let mut compacted_tool_results: HashMap<
+        (TurnId, ResponseId, ToolCallId),
+        (u64, &CanonicalToolResultCompacted),
+    > = HashMap::new();
 
     for record in records {
         if let CanonicalRecordKind::ToolResultCompacted(compacted) = &record.kind {
@@ -107,7 +109,8 @@ pub fn build_canonical_context(records: &[CanonicalRecord]) -> Result<CanonicalC
 
         if matches!(
             record.kind,
-            CanonicalRecordKind::CompactReplacement(_) | CanonicalRecordKind::ToolResultCompacted(_)
+            CanonicalRecordKind::CompactReplacement(_)
+                | CanonicalRecordKind::ToolResultCompacted(_)
         ) {
             continue;
         }
@@ -440,9 +443,10 @@ mod tests {
         ];
 
         let err = build_canonical_context(&records).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("canonical compacted tool result target not found"));
+        assert!(
+            err.to_string()
+                .contains("canonical compacted tool result target not found")
+        );
     }
 
     #[test]

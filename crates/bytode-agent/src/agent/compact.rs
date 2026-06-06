@@ -1,12 +1,12 @@
 use super::{Agent, AgentMode};
 use crate::error::Result;
 use crate::llm::{self, LlmOutput};
+use crate::session::InteractiveCompactEntry;
 use crate::session::compact::interactive::{
     self, InteractiveCompactOutput, build_compact_system_msg, commit_to_main_store,
     create_compact_store, generate_canonical_evidence_pack,
 };
 use crate::session::conversation::select_canonical_source_span;
-use crate::session::InteractiveCompactEntry;
 use std::path::PathBuf;
 
 impl Agent {
@@ -34,13 +34,15 @@ impl Agent {
         let start_seq = source_range.start_seq;
         let end_seq = source_range.end_seq_exclusive;
 
-        self.compact = Some(crate::session::compact::interactive::InteractiveCompactState {
-            source_range,
-            evidence_pack_ref,
-            compact_store,
-            messages: vec![system_msg],
-            current_content: String::new(),
-        });
+        self.compact = Some(
+            crate::session::compact::interactive::InteractiveCompactState {
+                source_range,
+                evidence_pack_ref,
+                compact_store,
+                messages: vec![system_msg],
+                current_content: String::new(),
+            },
+        );
         self.mode = AgentMode::InteractiveCompact;
 
         tracing::info!(start_seq, end_seq, "interactive compact started");
@@ -95,7 +97,9 @@ impl Agent {
             }
         };
 
-        state.messages.push(llm::build_assistant_text_message(&content));
+        state
+            .messages
+            .push(llm::build_assistant_text_message(&content));
         state.current_content = content.clone();
 
         {

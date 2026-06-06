@@ -504,11 +504,16 @@ impl SessionRuntime {
 fn map_flat_tool_results_to_canonical_targets(
     entries: &[SessionEntry],
     records: &[CanonicalRecord],
-) -> Result<HashMap<EntryId, (
-    crate::session::conversation::TurnId,
-    crate::session::conversation::ResponseId,
-    crate::session::conversation::ToolCallId,
-)>> {
+) -> Result<
+    HashMap<
+        EntryId,
+        (
+            crate::session::conversation::TurnId,
+            crate::session::conversation::ResponseId,
+            crate::session::conversation::ToolCallId,
+        ),
+    >,
+> {
     let flat_tool_result_ids: Vec<EntryId> = entries
         .iter()
         .filter_map(|entry| match entry.kind {

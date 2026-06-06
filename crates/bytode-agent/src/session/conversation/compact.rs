@@ -2,9 +2,7 @@
 //! interactive compact. Operates purely on canonical records — never on flat
 //! `SessionEntry`.
 
-use crate::session::conversation::model::{
-    CanonicalRecord, CanonicalRecordKind, CanonicalSpan,
-};
+use crate::session::conversation::model::{CanonicalRecord, CanonicalRecordKind, CanonicalSpan};
 
 /// Number of most-recent completed turns kept out of any compact span.
 const KEEP_RECENT_TURNS: usize = 6;
@@ -67,7 +65,10 @@ pub fn canonical_evidence(records: &[CanonicalRecord], span: &CanonicalSpan) -> 
         }
         match &record.kind {
             CanonicalRecordKind::TurnStarted(ts) => {
-                out.push_str(&format!("[seq {seq}] User: {}\n", truncate(&ts.content, 400)));
+                out.push_str(&format!(
+                    "[seq {seq}] User: {}\n",
+                    truncate(&ts.content, 400)
+                ));
             }
             CanonicalRecordKind::AssistantResponse(ar) => {
                 for part in &ar.parts {
@@ -133,10 +134,7 @@ mod tests {
     use crate::session::model::{ArtifactId, ArtifactKind, ArtifactRef, EntryId};
 
     fn meta(seq: u64) -> CanonicalMeta {
-        CanonicalMeta {
-            seq,
-            created_at: 0,
-        }
+        CanonicalMeta { seq, created_at: 0 }
     }
 
     fn turn(seq_start: u64, turn_id: &str) -> Vec<CanonicalRecord> {

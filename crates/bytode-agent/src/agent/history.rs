@@ -1,4 +1,4 @@
-use super::{tool_calls::format_args, Agent, memory};
+use super::{Agent, memory, tool_calls::format_args};
 use crate::error::Result;
 use crate::tools::ToolResult;
 use crate::transcript::{
@@ -131,9 +131,13 @@ fn flush_tool_results(history: &mut Vec<HistoryEntry>, pending: &mut Vec<String>
 }
 
 fn history_tool_part(record: &memory::ToolCallRecord) -> ToolPart {
-    let summary = format!("{} {}", record.name, format_args(&record.name, &record.arguments))
-        .trim()
-        .to_string();
+    let summary = format!(
+        "{} {}",
+        record.name,
+        format_args(&record.name, &record.arguments)
+    )
+    .trim()
+    .to_string();
     let state = if record.is_error() {
         ToolState::Failed
     } else {
