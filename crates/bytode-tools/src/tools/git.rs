@@ -1,8 +1,6 @@
 use crate::error::{BytodeError, Result};
-use crate::{
-    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
-};
 use crate::tools::{Tool, ToolResult};
+use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -226,8 +224,12 @@ RETURNS: one line per commit (short hash + message)."#,
         cmd.current_dir(&self.project_root);
         cmd.args(["log", "--oneline"]);
 
-        let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(10);
-        cmd.arg(format!("-n{}", count.max(1).min(100)));
+        let count = args
+            .get("count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(10)
+            .clamp(1, 100);
+        cmd.arg(format!("-n{}", count));
 
         if let Some(path) = args["path"].as_str() {
             cmd.arg("--").arg(path);

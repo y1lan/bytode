@@ -1,8 +1,6 @@
 use crate::error::{BytodeError, Result};
 use crate::tools::{Tool, ToolAvailability, ToolResult};
-use crate::{
-    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry,
-};
+use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -37,10 +35,7 @@ EXAMPLES:
 RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
             provider_id: "builtin",
             category: ToolCategory::Build,
-            capabilities: vec![
-                ToolCapability::RunBuild,
-                ToolCapability::RunProjectCommand,
-            ],
+            capabilities: vec![ToolCapability::RunBuild, ToolCapability::RunProjectCommand],
             default_risk: RiskLevel::High,
             approval: ApprovalKind::OnRisk,
         }

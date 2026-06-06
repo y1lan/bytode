@@ -1,10 +1,8 @@
 use crate::error::Result;
 use crate::lsp::LspClient;
-use crate::{
-    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
-};
 use crate::tools::check::apply_simple_filter;
 use crate::tools::{DiagnosticItem, Tool, ToolResult};
+use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;

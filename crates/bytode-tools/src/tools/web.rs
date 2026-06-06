@@ -1,8 +1,6 @@
 use crate::error::{BytodeError, Result};
 use crate::tools::{Tool, ToolAvailability, ToolResult};
-use crate::{
-    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry,
-};
+use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;

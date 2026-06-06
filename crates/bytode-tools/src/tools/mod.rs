@@ -6,8 +6,8 @@ pub mod lsp_diag;
 pub mod search;
 pub mod web;
 
-use crate::error::Result;
 use crate::ToolDescriptor;
+use crate::error::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

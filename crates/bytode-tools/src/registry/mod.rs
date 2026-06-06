@@ -50,10 +50,12 @@ impl ToolRegistry {
 
             let allowed = match &entry.availability {
                 ToolAvailability::Always => true,
-                ToolAvailability::PrimaryLanguage { requires } => requires.contains(&primary_language),
-                ToolAvailability::DetectedLanguage { languages } => {
-                    languages.iter().any(|language| detected_languages.contains(*language))
+                ToolAvailability::PrimaryLanguage { requires } => {
+                    requires.contains(&primary_language)
                 }
+                ToolAvailability::DetectedLanguage { languages } => languages
+                    .iter()
+                    .any(|language| detected_languages.contains(*language)),
             };
 
             entry.enabled = allowed || enabled.contains(name);

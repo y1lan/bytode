@@ -1,8 +1,6 @@
 use crate::error::{BytodeError, Result};
-use crate::{
-    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
-};
 use crate::tools::{Tool, ToolResult};
+use crate::{ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -136,12 +134,12 @@ impl ReadFileTool {
 
     fn list_dir(&self, dir: &std::path::Path) -> Result<ToolResult> {
         let mut entries: Vec<String> = Vec::new();
-        let mut iter = std::fs::read_dir(dir).map_err(|e| BytodeError::Tool {
+        let iter = std::fs::read_dir(dir).map_err(|e| BytodeError::Tool {
             tool: "read_file".into(),
             message: format!("cannot read directory {}: {}", dir.display(), e),
         })?;
 
-        while let Some(entry) = iter.next() {
+        for entry in iter {
             let entry = entry.map_err(|e| BytodeError::Tool {
                 tool: "read_file".into(),
                 message: format!("error reading entry: {}", e),
