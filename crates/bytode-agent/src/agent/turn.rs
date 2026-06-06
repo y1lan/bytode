@@ -1,4 +1,7 @@
-use super::{Agent, AgentMode, AgentOutput, memory, tool_calls::ToolCallContext};
+use super::{
+    Agent, AgentMode, AgentOutput, memory,
+    tool_calls::{ToolCallContext, format_args},
+};
 use crate::agent::context::format_tool_result;
 use crate::error::Result;
 use crate::llm::LlmOutput;
@@ -157,7 +160,10 @@ impl Agent {
                     for (i, call) in calls.iter().enumerate() {
                         let tool_name = call.name.clone();
                         let tool_args = call.arguments.clone();
-                        on_text(&format!("\n  ⟳ {}()\n", tool_name));
+                        on_text(&format!(
+                            "\n  ⟳ {}\n",
+                            streamed_tool_summary(&tool_name, &tool_args)
+                        ));
 
                         let call_entry_id = self.runtime.record_tool_call(
                             &tool_name,
@@ -179,7 +185,7 @@ impl Agent {
                                 .execute(&engine_context, &turn_id.0, i, call)
                                 .await
                         };
-                        on_text(&format!("{}\n", outcome.display));
+                        on_text(&format!("{}\n", indent_tool_display(&outcome.display)));
 
                         if outcome.counts_as_error {
                             consecutive_errors += 1;
@@ -277,4 +283,27 @@ impl Agent {
             .record_tool_result(call_entry_id, None, status, kind, &content)?;
         Ok(())
     }
+}
+
+fn streamed_tool_summary(tool_name: &str, tool_args: &serde_json::Value) -> String {
+    let args = format_args(tool_name, tool_args);
+    if args.trim().is_empty() {
+        format!("{tool_name}()")
+    } else {
+        format!("{tool_name}({args})")
+    }
+}
+
+fn indent_tool_display(display: &str) -> String {
+    display
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("    {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

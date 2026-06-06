@@ -17,19 +17,16 @@ pub(crate) fn parse_assistant_message(
 
             let mut body = Vec::new();
             while let Some(next) = lines.peek() {
-                if parse_tool_header(next).is_some() {
+                if parse_tool_header(next).is_some() || parse_reasoning_header(next).is_some() {
                     break;
                 }
-                if body.is_empty() && next.trim().is_empty() {
-                    lines.next();
+
+                if !is_tool_body_line(next) {
                     break;
                 }
 
                 let next_line = lines.next().unwrap_or_default();
-                if next_line.trim().is_empty() {
-                    break;
-                }
-                body.push(next_line.to_string());
+                body.push(normalize_tool_body_line(next_line));
             }
 
             let joined_body = join_nonempty_lines(&body);
@@ -187,6 +184,22 @@ fn classify_tool_state(
     ToolState::Completed
 }
 
+fn is_tool_body_line(line: &str) -> bool {
+    line.trim().is_empty() || line.starts_with("   ") || line.starts_with('\t')
+}
+
+fn normalize_tool_body_line(line: &str) -> String {
+    if line.trim().is_empty() {
+        String::new()
+    } else if let Some(stripped) = line.strip_prefix("    ") {
+        stripped.to_string()
+    } else if let Some(stripped) = line.strip_prefix("   ") {
+        stripped.to_string()
+    } else {
+        line.to_string()
+    }
+}
+
 fn choose_tool_presentation(
     summary: &str,
     body: Option<&str>,
@@ -265,5 +278,23 @@ mod tests {
         };
 
         assert_eq!(part.presentation, ToolPresentation::Block);
+    }
+
+    #[test]
+    fn preserves_blank_lines_inside_streaming_tool_body() {
+        let message = parse_assistant_message(
+            "  ⟳ read_file(src/main.rs)\n    1 | fn main() {\n\n    3 | }\n\nDone reading file.",
+            ToolState::Completed,
+        );
+
+        let AssistantPart::Tool(part) = &message.parts[0] else {
+            panic!("expected tool part");
+        };
+        assert_eq!(part.body.as_deref(), Some("1 | fn main() {\n\n3 | }"));
+
+        let AssistantPart::Text(text) = &message.parts[1] else {
+            panic!("expected trailing text part");
+        };
+        assert_eq!(text.content, "Done reading file.");
     }
 }
