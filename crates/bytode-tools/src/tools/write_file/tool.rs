@@ -60,7 +60,8 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#,
                     .filter(|line| line.starts_with('-') || line.starts_with('+'))
                     .take(40)
                     .collect::<Vec<_>>();
-                let mut summary = format!("  {} ({} bytes, {} lines)\n", short, bytes_written, lines);
+                let mut summary =
+                    format!("  {} ({} bytes, {} lines)\n", short, bytes_written, lines);
                 for line in &changed {
                     summary.push_str(&format!("  {}\n", line));
                 }
@@ -144,7 +145,11 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#,
 
         let diff = match &old_content {
             Some(old) => compute_unified_diff(old, &input.content, &resolved_str),
-            None => format!("new file: {} ({} lines)", resolved_str, input.content.lines().count()),
+            None => format!(
+                "new file: {} ({} lines)",
+                resolved_str,
+                input.content.lines().count()
+            ),
         };
 
         Ok(ToolResult::WriteConfirmation {
