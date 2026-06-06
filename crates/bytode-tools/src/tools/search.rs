@@ -1,4 +1,7 @@
 use crate::error::{BytodeError, Result};
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
+};
 use crate::tools::{MatchItem, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -13,12 +16,10 @@ pub struct SearchTool {
 
 #[async_trait]
 impl Tool for SearchTool {
-    fn name(&self) -> &'static str {
-        "search_code"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Search codebase with ripgrep. Returns structured matches with file:line:column.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "search_code",
+            description: r#"Search codebase with ripgrep. Returns structured matches with file:line:column.
 
 WHEN TO USE: Find where a symbol is defined. Find all call sites. Discover patterns across files.
 WHEN NOT TO USE: For build errors → use get_diagnostics. For reading code → use read_file.
@@ -30,7 +31,13 @@ EXAMPLES:
   search_code(pattern="impl.*Handler", path="/home/user/src/")  # regex pattern
 
 Matches are truncated at 200 results. Use a more specific pattern if truncated.
-RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}], truncated }"#
+RETURNS: { "type": "matches", pattern, count, items: [{file, line, column, text}], truncated }"#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::SearchProject],
+            default_risk: RiskLevel::Low,
+            approval: ApprovalKind::Never,
+        }
     }
 
     fn parameters_schema(&self) -> Value {

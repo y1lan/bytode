@@ -1,4 +1,7 @@
 use crate::error::{BytodeError, Result};
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
+};
 use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -11,12 +14,10 @@ pub struct ReadFileTool {
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &'static str {
-        "read_file"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Read a file or list a directory. Returns line-numbered content for files, tree listing for directories.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "read_file",
+            description: r#"Read a file or list a directory. Returns line-numbered content for files, tree listing for directories.
 
 WHEN TO USE: Before editing any file. When you need to understand code structure.
 When you need to discover what files exist in a directory.
@@ -30,7 +31,13 @@ EXAMPLES:
   read_file(path="/home/user/project/src")                   # list directory contents
 
 RETURNS: For files: { "type": "file", path, content (with line numbers), line_count, total_bytes }.
-For directories: { "type": "text", path, content (tree listing with sizes and types) }."#
+For directories: { "type": "text", path, content (tree listing with sizes and types) }."#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::ReadProjectFile],
+            default_risk: RiskLevel::Low,
+            approval: ApprovalKind::Never,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -186,18 +193,22 @@ pub struct WriteFileTool {
 
 #[async_trait]
 impl Tool for WriteFileTool {
-    fn name(&self) -> &'static str {
-        "write_file"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Write content to a file. Creates or overwrites. Returns a diff of changes.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "write_file",
+            description: r#"Write content to a file. Creates or overwrites. Returns a diff of changes.
 
 WHEN TO USE: After diagnosing and deciding on a fix. After reading the current content.
 WHEN NOT TO USE: For reading — use read_file. For searching — use search_code.
 
 SAFETY: Writes are atomic (tmp file + rename). Path must be within project root.
-RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
+RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#,
+            provider_id: "builtin",
+            category: ToolCategory::Modification,
+            capabilities: vec![ToolCapability::WriteProjectFile],
+            default_risk: RiskLevel::High,
+            approval: ApprovalKind::Always,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -222,9 +233,6 @@ RETURNS: { "type": "write_confirmation", path, bytes_written, lines, diff }"#
         })
     }
 
-    fn requires_approval(&self) -> bool {
-        self.confirm_before_write
-    }
     fn timeout_ms(&self) -> u64 {
         10_000
     }

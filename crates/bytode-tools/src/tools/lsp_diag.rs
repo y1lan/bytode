@@ -1,5 +1,8 @@
 use crate::error::Result;
 use crate::lsp::LspClient;
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
+};
 use crate::tools::check::apply_simple_filter;
 use crate::tools::{DiagnosticItem, Tool, ToolResult};
 use async_trait::async_trait;
@@ -12,12 +15,10 @@ pub struct DiagnosticsTool {
 
 #[async_trait]
 impl Tool for DiagnosticsTool {
-    fn name(&self) -> &'static str {
-        "get_diagnostics"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Get structured diagnostics from rust-analyzer's live cache.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "get_diagnostics",
+            description: r#"Get structured diagnostics from rust-analyzer's live cache.
 
 WHEN TO USE (mandatory):
 1. After calling cargo_check — if cargo_check shows errors, call get_diagnostics() WITHOUT path to get ALL errors.
@@ -34,7 +35,13 @@ DO NOT:
 - grep error logs or cargo_check output — get_diagnostics is the ONLY authorized source
 - pass Cargo.toml or directory paths — only .rs files
 
-RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings, list: [{file, line, column, severity, message, code}] }"#
+RETURNS: { "type": "diagnostics", tool: "rust-analyzer", total, errors, warnings, list: [{file, line, column, severity, message, code}] }"#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::ReadDiagnostics],
+            default_risk: RiskLevel::Low,
+            approval: ApprovalKind::Never,
+        }
     }
 
     fn parameters_schema(&self) -> Value {

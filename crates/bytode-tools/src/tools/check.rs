@@ -1,4 +1,7 @@
 use crate::error::{BytodeError, Result};
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
+};
 use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -10,12 +13,10 @@ pub struct CheckTool {
 
 #[async_trait]
 impl Tool for CheckTool {
-    fn name(&self) -> &'static str {
-        "cargo_check"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Run `cargo check --message-format json` and return structured build diagnostics.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "cargo_check",
+            description: r#"Run `cargo check --message-format json` and return structured build diagnostics.
 
 All output is line-delimited JSON. Use the optional `filter` argument with simple jq-like
 syntax to extract specific information.
@@ -26,7 +27,13 @@ Supported filter operations:
   - `length` → count of diagnostics
   - Fields can be extracted: file, line, column, severity, message, code
 
-RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }"#
+RETURNS: { "type": "json", tool: "cargo", filter: optional, count, data: [...] }"#,
+            provider_id: "builtin",
+            category: ToolCategory::Build,
+            capabilities: vec![ToolCapability::RunBuild],
+            default_risk: RiskLevel::Medium,
+            approval: ApprovalKind::OnRisk,
+        }
     }
 
     fn parameters_schema(&self) -> Value {

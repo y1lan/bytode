@@ -1,5 +1,8 @@
 use crate::error::{BytodeError, Result};
-use crate::tools::{Tool, ToolAvailability, ToolCategory, ToolEntry, ToolResult};
+use crate::tools::{Tool, ToolAvailability, ToolResult};
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
@@ -11,12 +14,10 @@ pub struct SearchWebTool {
 
 #[async_trait]
 impl Tool for SearchWebTool {
-    fn name(&self) -> &'static str {
-        "search_web"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Search the web via DuckDuckGo HTML (no API key required). Returns plain-text results.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "web_search",
+            description: r#"Search the web via DuckDuckGo HTML (no API key required). Returns plain-text results.
 
 WHEN TO USE: For looking up crate docs, error messages, API references, or debugging information
 not available in the local codebase.
@@ -29,7 +30,13 @@ EXAMPLES:
   search_web(query="rust async trait Send bound")    # search for rust concepts
   search_web(query="reqwest 0.12 breaking changes")  # search for library docs
 
-RETURNS: Title, URL, and snippet for each result (up to 10)."#
+RETURNS: Title, URL, and snippet for each result (up to 10)."#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::NetworkAccess],
+            default_risk: RiskLevel::Medium,
+            approval: ApprovalKind::OnRisk,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -52,14 +59,14 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         let query = args["query"].as_str().ok_or_else(|| BytodeError::Tool {
-            tool: "search_web".into(),
+            tool: "web_search".into(),
             message: "missing 'query' argument".into(),
         })?;
 
         let query_trimmed = query.trim();
         if query_trimmed.is_empty() {
             return Err(BytodeError::Tool {
-                tool: "search_web".into(),
+                tool: "web_search".into(),
                 message: "query is empty".into(),
             });
         }
@@ -78,7 +85,7 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
         }
 
         let client = client_builder.build().map_err(|e| BytodeError::Tool {
-            tool: "search_web".into(),
+            tool: "web_search".into(),
             message: format!("failed to build HTTP client: {}", e),
         })?;
 
@@ -87,20 +94,20 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
             .send()
             .await
             .map_err(|e| BytodeError::Tool {
-                tool: "search_web".into(),
+                tool: "web_search".into(),
                 message: format!("request failed: {}", e),
             })?;
 
         let status = response.status();
         if !status.is_success() {
             return Err(BytodeError::Tool {
-                tool: "search_web".into(),
+                tool: "web_search".into(),
                 message: format!("DuckDuckGo returned HTTP {}", status),
             });
         }
 
         let body = response.text().await.map_err(|e| BytodeError::Tool {
-            tool: "search_web".into(),
+            tool: "web_search".into(),
             message: format!("failed to read response body: {}", e),
         })?;
 
@@ -108,7 +115,7 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
 
         if results.is_empty() {
             return Ok(ToolResult::Text {
-                source: "search_web".into(),
+                source: "web_search".into(),
                 content: "no results found".into(),
                 truncated: false,
             });
@@ -117,7 +124,7 @@ RETURNS: Title, URL, and snippet for each result (up to 10)."#
         let content = results.join("\n\n");
 
         Ok(ToolResult::Text {
-            source: "search_web".into(),
+            source: "web_search".into(),
             content,
             truncated: false,
         })
@@ -253,13 +260,12 @@ fn strip_html(s: &str) -> String {
 
 impl SearchWebTool {
     pub fn entry(timeout_secs: u64, proxy: Option<String>) -> ToolEntry {
-        ToolEntry {
-            tool: Box::new(SearchWebTool {
+        ToolEntry::new(
+            Box::new(SearchWebTool {
                 timeout_secs,
                 proxy,
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        }
+            ToolAvailability::Always,
+        )
     }
 }

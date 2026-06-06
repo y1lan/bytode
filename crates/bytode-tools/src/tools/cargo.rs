@@ -1,5 +1,8 @@
 use crate::error::{BytodeError, Result};
-use crate::tools::{Tool, ToolAvailability, ToolCategory, ToolResult};
+use crate::tools::{Tool, ToolAvailability, ToolResult};
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor, ToolEntry,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -16,12 +19,10 @@ pub struct CargoTool {
 
 #[async_trait]
 impl Tool for CargoTool {
-    fn name(&self) -> &'static str {
-        "cargo"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Run a cargo subcommand in the project root. Only whitelisted subcommands are allowed.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "cargo",
+            description: r#"Run a cargo subcommand in the project root. Only whitelisted subcommands are allowed.
 
 ALLOWED: check, build, test, clippy, fmt, doc, bench, run, clean, update
 
@@ -33,7 +34,16 @@ EXAMPLES:
   run_cargo(cmd="build")                          # cargo build
   run_cargo(cmd="build", args=["--release"])       # cargo build --release
 
-RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#
+RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#,
+            provider_id: "builtin",
+            category: ToolCategory::Build,
+            capabilities: vec![
+                ToolCapability::RunBuild,
+                ToolCapability::RunProjectCommand,
+            ],
+            default_risk: RiskLevel::High,
+            approval: ApprovalKind::OnRisk,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -58,10 +68,6 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#
 
     fn timeout_ms(&self) -> u64 {
         120_000
-    }
-
-    fn requires_approval(&self) -> bool {
-        false
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
@@ -130,13 +136,12 @@ RETURNS: stdout + stderr combined. Exit code is reported if non-zero."#
 }
 
 impl CargoTool {
-    pub fn entry(project_root: PathBuf) -> crate::tools::ToolEntry {
-        crate::tools::ToolEntry {
-            tool: Box::new(CargoTool { project_root }),
-            category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage {
+    pub fn entry(project_root: PathBuf) -> ToolEntry {
+        ToolEntry::new(
+            Box::new(CargoTool { project_root }),
+            ToolAvailability::PrimaryLanguage {
                 requires: &["rust"],
             },
-        }
+        )
     }
 }

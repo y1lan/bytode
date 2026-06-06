@@ -1,4 +1,7 @@
 use crate::error::{BytodeError, Result};
+use crate::{
+    ApprovalKind, RiskLevel, ToolCapability, ToolCategory, ToolDescriptor,
+};
 use crate::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -11,18 +14,22 @@ pub struct GitStatusTool {
 
 #[async_trait]
 impl Tool for GitStatusTool {
-    fn name(&self) -> &'static str {
-        "git_status"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Show working tree status via `git status --porcelain`.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "git_status",
+            description: r#"Show working tree status via `git status --porcelain`.
 
 EXAMPLES:
   git_status()                                # full status
   git_status(path="src/")                     # status for a subdirectory
 
-RETURNS: git status --porcelain output, or "clean" if no changes."#
+RETURNS: git status --porcelain output, or "clean" if no changes."#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::VcsRead],
+            default_risk: RiskLevel::Low,
+            approval: ApprovalKind::Never,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -83,12 +90,10 @@ pub struct GitDiffTool {
 
 #[async_trait]
 impl Tool for GitDiffTool {
-    fn name(&self) -> &'static str {
-        "git_diff"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Show unstaged diff via `git diff`. Use `staged=true` for staged diff (`git diff --cached`).
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "git_diff",
+            description: r#"Show unstaged diff via `git diff`. Use `staged=true` for staged diff (`git diff --cached`).
 
 EXAMPLES:
   git_diff()                                   # full unstaged diff
@@ -96,7 +101,13 @@ EXAMPLES:
   git_diff(staged=true)                         # staged diff only
   git_diff(staged=true, path="Cargo.toml")      # staged diff for one file
 
-RETURNS: unified diff output."#
+RETURNS: unified diff output."#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::VcsRead],
+            default_risk: RiskLevel::Medium,
+            approval: ApprovalKind::OnRisk,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -165,12 +176,10 @@ pub struct GitLogTool {
 
 #[async_trait]
 impl Tool for GitLogTool {
-    fn name(&self) -> &'static str {
-        "git_log"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Show recent commit history via `git log --oneline`.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "git_log",
+            description: r#"Show recent commit history via `git log --oneline`.
 
 EXAMPLES:
   git_log()                                    # last 10 commits
@@ -178,7 +187,13 @@ EXAMPLES:
   git_log(count=20, path="src/")               # last 20 commits in src/
   git_log(path="Cargo.toml")                   # commits touching Cargo.toml
 
-RETURNS: one line per commit (short hash + message)."#
+RETURNS: one line per commit (short hash + message)."#,
+            provider_id: "builtin",
+            category: ToolCategory::ReadOnly,
+            capabilities: vec![ToolCapability::VcsRead],
+            default_risk: RiskLevel::Low,
+            approval: ApprovalKind::Never,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -246,12 +261,10 @@ pub struct GitCommitTool {
 
 #[async_trait]
 impl Tool for GitCommitTool {
-    fn name(&self) -> &'static str {
-        "git_commit"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Stage all changes and create a commit. Runs `git add -A && git commit -m <message>`.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "git_commit",
+            description: r#"Stage all changes and create a commit. Runs `git add -A && git commit -m <message>`.
 
 SAFETY: Only operates within project root. Commit message is required.
 Returns the commit hash on success.
@@ -260,7 +273,13 @@ EXAMPLES:
   git_commit(message="fix: resolve clippy warnings")    # stage all + commit
   git_commit(message="feat: add login", files=["src/auth.rs", "tests/auth.rs"])  # commit specific files
 
-RETURNS: commit summary (hash + message) or error if nothing to commit."#
+RETURNS: commit summary (hash + message) or error if nothing to commit."#,
+            provider_id: "builtin",
+            category: ToolCategory::Modification,
+            capabilities: vec![ToolCapability::VcsWrite],
+            default_risk: RiskLevel::High,
+            approval: ApprovalKind::Always,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -283,9 +302,6 @@ RETURNS: commit summary (hash + message) or error if nothing to commit."#
         })
     }
 
-    fn requires_approval(&self) -> bool {
-        true
-    }
     fn timeout_ms(&self) -> u64 {
         30_000
     }
@@ -390,12 +406,10 @@ pub struct GitPushTool {
 
 #[async_trait]
 impl Tool for GitPushTool {
-    fn name(&self) -> &'static str {
-        "git_push"
-    }
-
-    fn description(&self) -> &'static str {
-        r#"Push commits to the remote repository. Runs `git push [remote] [branch]`.
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            name: "git_push",
+            description: r#"Push commits to the remote repository. Runs `git push [remote] [branch]`.
 
 SAFETY: Force push requires explicit `force=true`. Defaults to `origin` and current branch.
 
@@ -405,7 +419,13 @@ EXAMPLES:
   git_push(branch="feature-x")                  # push to origin/feature-x
   git_push(force=true)                          # force push (use with caution!)
 
-RETURNS: push output from git."#
+RETURNS: push output from git."#,
+            provider_id: "builtin",
+            category: ToolCategory::Modification,
+            capabilities: vec![ToolCapability::VcsWrite, ToolCapability::NetworkAccess],
+            default_risk: RiskLevel::Critical,
+            approval: ApprovalKind::Always,
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -437,9 +457,6 @@ RETURNS: push output from git."#
         })
     }
 
-    fn requires_approval(&self) -> bool {
-        true
-    }
     fn timeout_ms(&self) -> u64 {
         60_000
     }

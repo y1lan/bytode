@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tools::{
-    ToolAvailability, ToolCategory, ToolEntry, ToolRegistry,
+    ToolAvailability, ToolEntry, ToolRegistry,
     cargo::CargoTool,
     check::CheckTool,
     file::{ReadFileTool, WriteFileTool},
@@ -69,103 +69,91 @@ async fn main() -> Result<()> {
     }));
 
     let tools: Vec<ToolEntry> = vec![
-        ToolEntry {
-            tool: Box::new(ReadFileTool {
+        ToolEntry::new(
+            Box::new(ReadFileTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(WriteFileTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(WriteFileTool {
                 project_root: project_root.clone(),
                 confirm_before_write: config.agent.confirm_before_write,
                 max_file_size: config.security.max_file_size,
                 forbidden_patterns: config.security.forbidden_write_patterns.clone(),
                 lsp: Some(lsp_client.clone()),
             }),
-            category: ToolCategory::Modification,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(SearchTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(SearchTool {
                 project_root: project_root.clone(),
                 ignore_dirs: config.search.ignore_dirs.clone(),
                 max_results: config.search.max_results,
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(CheckTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(CheckTool {
                 extra_args: config.build.extra_check_flags.clone(),
             }),
-            category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage {
+            ToolAvailability::PrimaryLanguage {
                 requires: &["rust"],
             },
-        },
-        ToolEntry {
-            tool: Box::new(DiagnosticsTool {
+        ),
+        ToolEntry::new(
+            Box::new(DiagnosticsTool {
                 lsp: lsp_client.clone(),
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::DetectedLanguage {
+            ToolAvailability::DetectedLanguage {
                 languages: &["rust"],
             },
-        },
-        ToolEntry {
-            tool: Box::new(SearchWebTool {
+        ),
+        ToolEntry::new(
+            Box::new(SearchWebTool {
                 timeout_secs: config.web_search.timeout_secs,
                 proxy: config.web_search.proxy.clone(),
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(CargoTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(CargoTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::Build,
-            availability: ToolAvailability::PrimaryLanguage {
+            ToolAvailability::PrimaryLanguage {
                 requires: &["rust"],
             },
-        },
-        ToolEntry {
-            tool: Box::new(GitStatusTool {
+        ),
+        ToolEntry::new(
+            Box::new(GitStatusTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(GitDiffTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(GitDiffTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(GitLogTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(GitLogTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::ReadOnly,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(GitCommitTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(GitCommitTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::Modification,
-            availability: ToolAvailability::Always,
-        },
-        ToolEntry {
-            tool: Box::new(GitPushTool {
+            ToolAvailability::Always,
+        ),
+        ToolEntry::new(
+            Box::new(GitPushTool {
                 project_root: project_root.clone(),
             }),
-            category: ToolCategory::Modification,
-            availability: ToolAvailability::Always,
-        },
+            ToolAvailability::Always,
+        ),
     ];
 
     let registry = ToolRegistry::new(tools);
