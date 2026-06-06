@@ -3,6 +3,9 @@ use super::policy::{PolicyDecision, ToolPolicyEngine};
 use super::{ToolCallContext, ToolCallOutcome, ToolCallRequest, format_args};
 use crate::agent::audit::event::unix_timestamp;
 use crate::agent::audit::{AuditEvent, AuditEventKind, AuditEventSummary, AuditRecorder};
+use crate::agent::tool_runtime::{
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolRuntime, ToolTimeout,
+};
 use crate::error::Result;
 use crate::llm::ToolCall;
 use crate::session::ToolStatus;
@@ -10,10 +13,11 @@ use crate::tools::{ToolDescriptor, ToolResult};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct ToolCallEngine {
     policy: ToolPolicyEngine,
+    runtime: ToolRuntime,
     audit: Mutex<AuditRecorder>,
     audit_event_prefix: String,
     audit_event_seq: AtomicU64,
@@ -25,6 +29,7 @@ impl ToolCallEngine {
         let session_id = session_id.into();
         Ok(Self {
             policy: ToolPolicyEngine,
+            runtime: ToolRuntime::new(),
             audit: Mutex::new(AuditRecorder::open(&session_id, session_root)?),
             audit_event_prefix: format!("{}-{}", std::process::id(), unix_timestamp_nanos()),
             audit_event_seq: AtomicU64::new(0),
@@ -107,6 +112,7 @@ impl ToolCallEngine {
                     &request,
                     turn_id,
                     &audit_tool_call_id,
+                    &ctx.profile.root,
                 )
                 .await
             }
@@ -178,6 +184,7 @@ impl ToolCallEngine {
                             &request,
                             turn_id,
                             &audit_tool_call_id,
+                            &ctx.profile.root,
                         )
                         .await
                     }
@@ -211,6 +218,7 @@ impl ToolCallEngine {
         request: &ToolCallRequest,
         turn_id: &str,
         audit_tool_call_id: &str,
+        working_dir: &Path,
     ) -> ToolCallOutcome {
         let started_at = unix_timestamp();
         self.record_audit(
@@ -220,11 +228,35 @@ impl ToolCallEngine {
             tool_summary(&request.descriptor, &request.call.arguments).with_started_at(started_at),
         );
 
-        let started = Instant::now();
-        let outcome = execute_tool(tool, request).await;
+        let runtime_result = self
+            .runtime
+            .execute(
+                tool,
+                ToolInvocation {
+                    execution_id: format!("exec-{audit_tool_call_id}"),
+                    session_id: self.session_id.clone(),
+                    turn_id: turn_id.to_string(),
+                    tool_call_id: audit_tool_call_id.to_string(),
+                    tool_name: request.descriptor.name.to_string(),
+                    provider_id: request.descriptor.provider_id.to_string(),
+                    arguments: request.call.arguments.clone(),
+                    descriptor: request.descriptor.clone(),
+                    working_dir: working_dir.to_path_buf(),
+                    timeout: ToolTimeout::from_millis(tool.timeout_ms()),
+                },
+            )
+            .await;
         let finished_at = unix_timestamp();
-        let duration_ms = started.elapsed().as_millis() as u64;
-        let event_kind = if outcome.status == ToolStatus::Ok {
+        let duration_ms = runtime_result.duration.as_millis() as u64;
+        tracing::debug!(
+            execution_id = %runtime_result.execution_id,
+            status = ?runtime_result.status,
+            artifacts = runtime_result.artifacts.len(),
+            effects = runtime_result.effects.len(),
+            duration_ms,
+            "tool runtime execution finished"
+        );
+        let event_kind = if runtime_result.status == ToolExecutionStatus::Success {
             AuditEventKind::ToolExecutionFinished
         } else {
             AuditEventKind::ToolExecutionFailed
@@ -234,14 +266,21 @@ impl ToolCallEngine {
             .with_started_at(started_at)
             .with_finished_at(finished_at)
             .with_duration_ms(duration_ms);
-        if outcome.status == ToolStatus::Ok {
-            summary = summary.with_result_summary(result_summary(&outcome.result));
+        if runtime_result.status == ToolExecutionStatus::Success {
+            if let Some(output) = runtime_result.output.as_ref() {
+                summary = summary.with_result_summary(result_summary(output));
+            }
         } else {
-            summary = summary.with_error_summary(result_summary(&outcome.result));
+            summary = summary.with_error_summary(
+                runtime_result
+                    .error
+                    .as_deref()
+                    .unwrap_or("tool execution failed"),
+            );
         }
 
         self.record_audit(turn_id, audit_tool_call_id, event_kind, summary);
-        outcome
+        runtime_result_to_outcome(tool, request, runtime_result)
     }
 
     fn record_audit(
@@ -275,43 +314,6 @@ impl ToolCallEngine {
     fn next_audit_event_id(&self) -> String {
         let seq = self.audit_event_seq.fetch_add(1, Ordering::Relaxed);
         format!("audit-{}-{seq:08}", self.audit_event_prefix)
-    }
-}
-
-async fn execute_tool(tool: &dyn crate::tools::Tool, request: &ToolCallRequest) -> ToolCallOutcome {
-    let timeout = tokio::time::Duration::from_millis(tool.timeout_ms());
-    match tokio::time::timeout(timeout, tool.execute(request.call.arguments.clone())).await {
-        Ok(Ok(result)) => {
-            let display = tool
-                .format_result_for_display(&result)
-                .unwrap_or_else(|| "  ok".into());
-            ToolCallOutcome {
-                result,
-                status: ToolStatus::Ok,
-                display,
-                counts_as_error: false,
-            }
-        }
-        Ok(Err(error)) => ToolCallOutcome {
-            result: ToolResult::Text {
-                source: "tool_error".into(),
-                content: format!("Error: {error}"),
-                truncated: false,
-            },
-            status: ToolStatus::Error,
-            display: format!("Error: {error}"),
-            counts_as_error: true,
-        },
-        Err(_) => ToolCallOutcome {
-            result: ToolResult::Text {
-                source: "tool_error".into(),
-                content: format!("Error: {} timed out", request.descriptor.name),
-                truncated: false,
-            },
-            status: ToolStatus::Error,
-            display: format!("Error: {} timed out", request.descriptor.name),
-            counts_as_error: true,
-        },
     }
 }
 
@@ -354,6 +356,58 @@ fn rejected_outcome(request: &ApprovalRequest, reason: &str) -> ToolCallOutcome 
         status: ToolStatus::Cancelled,
         display: format!("Rejected: {}", request.summary),
         counts_as_error: false,
+    }
+}
+
+fn runtime_result_to_outcome(
+    tool: &dyn crate::tools::Tool,
+    request: &ToolCallRequest,
+    runtime_result: ToolExecutionResult,
+) -> ToolCallOutcome {
+    match runtime_result.status {
+        ToolExecutionStatus::Success => {
+            let Some(result) = runtime_result.output else {
+                let message = "tool runtime succeeded without output".to_string();
+                return tool_error_outcome(message);
+            };
+            let display = tool
+                .format_result_for_display(&result)
+                .unwrap_or_else(|| "  ok".into());
+            ToolCallOutcome {
+                result,
+                status: ToolStatus::Ok,
+                display,
+                counts_as_error: false,
+            }
+        }
+        ToolExecutionStatus::TimedOut => {
+            let message = runtime_result
+                .error
+                .unwrap_or_else(|| format!("{} timed out", request.descriptor.name));
+            tool_error_outcome(message)
+        }
+        ToolExecutionStatus::Failed
+        | ToolExecutionStatus::Denied
+        | ToolExecutionStatus::Rejected
+        | ToolExecutionStatus::Cancelled => {
+            let message = runtime_result
+                .error
+                .unwrap_or_else(|| format!("{} failed", request.descriptor.name));
+            tool_error_outcome(message)
+        }
+    }
+}
+
+fn tool_error_outcome(message: String) -> ToolCallOutcome {
+    ToolCallOutcome {
+        result: ToolResult::Text {
+            source: "tool_error".into(),
+            content: format!("Error: {message}"),
+            truncated: false,
+        },
+        status: ToolStatus::Error,
+        display: format!("Error: {message}"),
+        counts_as_error: true,
     }
 }
 

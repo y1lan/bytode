@@ -21,17 +21,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tools::tools::lsp::DiagnosticsTool;
-use tools::{
-    ToolAvailability, ToolEntry, ToolRegistry,
-    cargo::CargoTool,
-    cargo::CheckTool,
-    git::{GitCommitTool, GitDiffTool, GitLogTool, GitPushTool, GitStatusTool},
-    read_file::ReadFileTool,
-    search_code::SearchTool,
-    web::SearchWebTool,
-    write_file::WriteFileTool,
-};
+use tools::{BuiltinToolConfig, BuiltinToolProvider, ToolProvider, ToolRegistry};
 use ui::panels::HistoryEntry;
 
 #[derive(Parser)]
@@ -69,95 +59,22 @@ async fn main() -> Result<()> {
         options: lsp_options,
     }));
 
-    let tools: Vec<ToolEntry> = vec![
-        ToolEntry::new(
-            Box::new(ReadFileTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(WriteFileTool {
-                project_root: project_root.clone(),
-                confirm_before_write: config.agent.confirm_before_write,
-                max_file_size: config.security.max_file_size,
-                forbidden_patterns: config.security.forbidden_write_patterns.clone(),
-                lsp: Some(lsp_client.clone()),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(SearchTool {
-                project_root: project_root.clone(),
-                ignore_dirs: config.search.ignore_dirs.clone(),
-                max_results: config.search.max_results,
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(CheckTool {
-                extra_args: config.build.extra_check_flags.clone(),
-            }),
-            ToolAvailability::PrimaryLanguage {
-                requires: &["rust"],
-            },
-        ),
-        ToolEntry::new(
-            Box::new(DiagnosticsTool {
-                lsp: lsp_client.clone(),
-            }),
-            ToolAvailability::DetectedLanguage {
-                languages: &["rust"],
-            },
-        ),
-        ToolEntry::new(
-            Box::new(SearchWebTool {
-                timeout_secs: config.web_search.timeout_secs,
-                proxy: config.web_search.proxy.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(CargoTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::PrimaryLanguage {
-                requires: &["rust"],
-            },
-        ),
-        ToolEntry::new(
-            Box::new(GitStatusTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(GitDiffTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(GitLogTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(GitCommitTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-        ToolEntry::new(
-            Box::new(GitPushTool {
-                project_root: project_root.clone(),
-            }),
-            ToolAvailability::Always,
-        ),
-    ];
-
-    let registry = ToolRegistry::new(tools);
+    let builtin_config = BuiltinToolConfig {
+        confirm_before_write: config.agent.confirm_before_write,
+        max_file_size: config.security.max_file_size,
+        forbidden_write_patterns: config.security.forbidden_write_patterns.clone(),
+        ignore_dirs: config.search.ignore_dirs.clone(),
+        max_results: config.search.max_results,
+        extra_check_flags: config.build.extra_check_flags.clone(),
+        web_timeout_secs: config.web_search.timeout_secs,
+        web_proxy: config.web_search.proxy.clone(),
+    };
+    let providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(BuiltinToolProvider::new(
+        project_root.clone(),
+        builtin_config,
+        Some(lsp_client.clone()),
+    ))];
+    let registry = ToolRegistry::from_providers(providers);
     let (enabled_set, disabled_set, is_exact) = match &config.tools {
         config::ToolSelection::Exact { enabled } => {
             (enabled.iter().cloned().collect(), HashSet::new(), true)

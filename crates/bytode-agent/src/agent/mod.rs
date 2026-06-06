@@ -5,6 +5,7 @@ mod history;
 pub(crate) mod memory;
 pub(crate) mod provider_adapter;
 mod tool_calls;
+pub(crate) mod tool_runtime;
 mod turn;
 
 pub use tool_calls::{ApprovalEvent, InteractiveApprovalChannel};

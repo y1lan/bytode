@@ -1,8 +1,10 @@
+mod builtin;
 mod entry;
 mod provider;
 
+pub use builtin::{BuiltinToolConfig, BuiltinToolProvider};
 pub use entry::ToolEntry;
-pub use provider::ToolProviderId;
+pub use provider::{ToolProvider, ToolProviderId};
 
 use crate::descriptor::{ToolCapability, ToolDescriptor};
 use crate::tools::ToolAvailability;
@@ -25,6 +27,14 @@ impl ToolRegistry {
             all: tools,
             name_to_index,
         }
+    }
+
+    pub fn from_providers(providers: Vec<Box<dyn ToolProvider>>) -> Self {
+        let tools = providers
+            .into_iter()
+            .flat_map(|provider| provider.tools())
+            .collect();
+        Self::new(tools)
     }
 
     pub fn activate_for(
