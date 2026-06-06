@@ -341,6 +341,82 @@ mod tests {
     }
 
     #[test]
+    fn multi_tool_calls_with_synthetic_ids_preserve_unique_tool_result_binding() {
+        let context = ctx(vec![
+            CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {
+                turn_id: TurnId("t1".into()),
+                user_message_id: CanonicalMessageId("m1".into()),
+                content: "task".into(),
+            }),
+            CanonicalRecordKind::AssistantResponse(CanonicalAssistantResponse {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                message_id: CanonicalMessageId("m2".into()),
+                parts: vec![
+                    CanonicalAssistantPart::ToolCall {
+                        tool_call_id: ToolCallId("t1-r1-0".into()),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "a.rs"}),
+                    },
+                    CanonicalAssistantPart::ToolCall {
+                        tool_call_id: ToolCallId("t1-r1-1".into()),
+                        name: "git_status".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                ],
+            }),
+            CanonicalRecordKind::ToolResults(CanonicalToolResults {
+                turn_id: TurnId("t1".into()),
+                response_id: ResponseId("r1".into()),
+                results: vec![
+                    CanonicalToolResultPart {
+                        tool_call_id: ToolCallId("t1-r1-0".into()),
+                        status: CanonicalToolStatus::Ok,
+                        content: CanonicalContent::Inline("content a".into()),
+                    },
+                    CanonicalToolResultPart {
+                        tool_call_id: ToolCallId("t1-r1-1".into()),
+                        status: CanonicalToolStatus::Ok,
+                        content: CanonicalContent::Inline("status".into()),
+                    },
+                ],
+            }),
+            CanonicalRecordKind::TurnFinished(CanonicalTurnFinished {
+                turn_id: TurnId("t1".into()),
+            }),
+        ]);
+
+        let messages = ProviderAdapter::adapt(&context).unwrap();
+
+        assert_eq!(messages.len(), 4);
+        let assistant = serde_json::to_value(&messages[1]).unwrap();
+        let tool_calls = assistant
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .expect("assistant tool_calls");
+        assert_eq!(tool_calls.len(), 2);
+        assert_eq!(
+            tool_calls[0].get("id").and_then(|v| v.as_str()),
+            Some("t1-r1-0")
+        );
+        assert_eq!(
+            tool_calls[1].get("id").and_then(|v| v.as_str()),
+            Some("t1-r1-1")
+        );
+
+        let tool_1 = serde_json::to_value(&messages[2]).unwrap();
+        let tool_2 = serde_json::to_value(&messages[3]).unwrap();
+        assert_eq!(
+            tool_1.get("tool_call_id").and_then(|v| v.as_str()),
+            Some("t1-r1-0")
+        );
+        assert_eq!(
+            tool_2.get("tool_call_id").and_then(|v| v.as_str()),
+            Some("t1-r1-1")
+        );
+    }
+
+    #[test]
     fn tool_results_with_missing_response_id_returns_error() {
         let context = ctx(vec![
             CanonicalRecordKind::TurnStarted(CanonicalTurnStarted {

@@ -90,7 +90,7 @@ impl DeepSeekClient {
             .model(&self.model)
             .messages(messages)
             .tools(openai_tools)
-            .parallel_tool_calls(false)
+            .parallel_tool_calls(true)
             .max_tokens(self.max_tokens)
             .temperature(0.0_f32)
             .build()

@@ -221,15 +221,11 @@ impl Agent {
                         let msg_id = CanonicalMessageId(format!("m-{}", meta.seq));
                         let parts: Vec<CanonicalAssistantPart> = calls
                             .iter()
-                            .map(|call| {
+                            .enumerate()
+                            .map(|(i, call)| {
                                 let tc_id = if call.id.is_empty() {
-                                    // Synthetic id based on turn_id + response_id + part index.
-                                    ToolCallId(format!(
-                                        "{}-{}-{}",
-                                        turn_id.0,
-                                        rid.0,
-                                        calls.iter().position(|c| c.id == call.id).unwrap_or(0)
-                                    ))
+                                    // Synthetic id based on turn/response and stable part index.
+                                    ToolCallId(format!("{}-{}-{}", turn_id.0, rid.0, i))
                                 } else {
                                     ToolCallId(call.id.clone())
                                 };
