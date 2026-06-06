@@ -2,7 +2,7 @@ use super::decision::PolicyDecision;
 use super::rule::PLAN_MODE_DENIED_CAPABILITIES;
 use crate::agent::AgentMode;
 use crate::agent::tool_calls::{ToolCallContext, ToolCallRequest};
-use crate::tools::ToolCapability;
+use crate::tools::{RiskLevel, ToolCapability};
 use std::path::{Path, PathBuf};
 
 pub struct ToolPolicyEngine;
@@ -39,9 +39,21 @@ impl ToolPolicyEngine {
             }
             name if request
                 .descriptor
+                .provider_id
+                .starts_with("mcp:") =>
+            {
+                if request.descriptor.default_risk == RiskLevel::Critical {
+                    return PolicyDecision::Deny(format!(
+                        "{name} is denied by default because the MCP server declares command execution"
+                    ));
+                }
+                PolicyDecision::Ask(format!("{name} requires approval"))
+            }
+            name if request
+                .descriptor
                 .capabilities
                 .iter()
-                .any(|capability| matches!(capability, ToolCapability::VcsWrite)) =>
+                .any(|capability| matches!(capability, ToolCapability::VcsWrite | ToolCapability::UnknownExternal)) =>
             {
                 PolicyDecision::Ask(format!("{name} requires approval"))
             }

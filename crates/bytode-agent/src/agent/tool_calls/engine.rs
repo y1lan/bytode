@@ -9,7 +9,7 @@ use crate::agent::tool_runtime::{
 use crate::error::Result;
 use crate::llm::ToolCall;
 use crate::session::ToolStatus;
-use crate::tools::{ToolDescriptor, ToolResult};
+use crate::tools::{ProviderMeta, ToolDescriptor, ToolResult};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -419,9 +419,12 @@ mod tests {
     use crate::project::{BuildSystem, Language, ProjectProfile};
     use crate::tools::read_file::ReadFileTool;
     use crate::tools::write_file::WriteFileTool;
-    use crate::tools::{ToolAvailability, ToolEntry, ToolRegistry};
+    use crate::tools::{
+        ApprovalKind, McpToolMeta, ProviderMeta, RiskLevel, Tool, ToolAvailability, ToolCapability,
+        ToolCategory, ToolDescriptor, ToolEntry, ToolRegistry, ToolResult,
+    };
     use async_trait::async_trait;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -598,6 +601,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_rejection_does_not_invoke_remote_tool_and_keeps_provider_audit() {
+        let tmp = TestRoot::new();
+        tmp.write("Cargo.toml", "[package]\nname = \"audit-fixture\"\n");
+
+        let session_root = tmp.path().join(".session");
+        let engine = ToolCallEngine::new("session-mcp-reject", session_root.clone()).unwrap();
+        let call_count = Arc::new(AtomicU64::new(0));
+        let registry = mcp_registry(call_count.clone(), RiskLevel::High);
+        let profile = profile(tmp.path());
+        let approval = Arc::new(RejectingApproval);
+        let ctx = context(&registry, &profile, Some(approval));
+
+        let outcome = engine
+            .execute(
+                &ctx,
+                "turn-mcp",
+                0,
+                &ToolCall {
+                    id: "call-mcp".into(),
+                    name: "mcp__demo__list_docs".into(),
+                    arguments: json!({ "query": "policy" }),
+                },
+            )
+            .await;
+
+        assert_eq!(outcome.status, ToolStatus::Cancelled);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
+
+        let events = audit_events(&session_root);
+        assert!(!kinds(&events).contains(&AuditEventKind::ToolExecutionStarted));
+        assert!(events.iter().any(|event| {
+            event.kind == AuditEventKind::ApprovalRequested
+                && event.summary.provider_id.as_deref() == Some("mcp:demo")
+                && event.summary.server_name.as_deref() == Some("demo")
+                && event.summary.remote_tool_name.as_deref() == Some("list_docs")
+                && event.summary.transport.as_deref() == Some("http+sse")
+        }));
+    }
+
+    #[tokio::test]
+    async fn mcp_approval_invokes_remote_tool_and_records_provider_audit() {
+        let tmp = TestRoot::new();
+        tmp.write("Cargo.toml", "[package]\nname = \"audit-fixture\"\n");
+
+        let session_root = tmp.path().join(".session");
+        let engine = ToolCallEngine::new("session-mcp-approve", session_root.clone()).unwrap();
+        let call_count = Arc::new(AtomicU64::new(0));
+        let registry = mcp_registry(call_count.clone(), RiskLevel::High);
+        let profile = profile(tmp.path());
+        let approval = Arc::new(ApprovingApproval);
+        let ctx = context(&registry, &profile, Some(approval));
+
+        let outcome = engine
+            .execute(
+                &ctx,
+                "turn-mcp",
+                0,
+                &ToolCall {
+                    id: "call-mcp".into(),
+                    name: "mcp__demo__list_docs".into(),
+                    arguments: json!({ "query": "policy" }),
+                },
+            )
+            .await;
+
+        assert_eq!(outcome.status, ToolStatus::Ok);
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+
+        let events = audit_events(&session_root);
+        assert!(events.iter().any(|event| {
+            event.kind == AuditEventKind::ToolExecutionFinished
+                && event.summary.provider_id.as_deref() == Some("mcp:demo")
+                && event.summary.server_name.as_deref() == Some("demo")
+                && event.summary.remote_tool_name.as_deref() == Some("list_docs")
+                && event.summary.transport.as_deref() == Some("http+sse")
+        }));
+    }
+
+    #[tokio::test]
+    async fn critical_mcp_tool_is_denied_before_approval() {
+        let tmp = TestRoot::new();
+        tmp.write("Cargo.toml", "[package]\nname = \"audit-fixture\"\n");
+
+        let session_root = tmp.path().join(".session");
+        let engine = ToolCallEngine::new("session-mcp-critical", session_root.clone()).unwrap();
+        let call_count = Arc::new(AtomicU64::new(0));
+        let registry = mcp_registry(call_count.clone(), RiskLevel::Critical);
+        let profile = profile(tmp.path());
+        let approval = Arc::new(ApprovingApproval);
+        let ctx = context(&registry, &profile, Some(approval));
+
+        let outcome = engine
+            .execute(
+                &ctx,
+                "turn-mcp",
+                0,
+                &ToolCall {
+                    id: "call-mcp".into(),
+                    name: "mcp__demo__list_docs".into(),
+                    arguments: json!({}),
+                },
+            )
+            .await;
+
+        assert_eq!(outcome.status, ToolStatus::Cancelled);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
+
+        let event_kinds = kinds(&audit_events(&session_root));
+        assert!(event_kinds.contains(&AuditEventKind::ToolExecutionDenied));
+        assert!(!event_kinds.contains(&AuditEventKind::ApprovalRequested));
+    }
+
+    #[tokio::test]
     async fn unknown_tool_audits_policy_denial_without_starting_execution() {
         let tmp = TestRoot::new();
         tmp.write("Cargo.toml", "[package]\nname = \"audit-fixture\"\n");
@@ -722,6 +838,15 @@ mod tests {
         registry
     }
 
+    fn mcp_registry(call_count: Arc<AtomicU64>, risk: RiskLevel) -> ToolRegistry {
+        let mut registry = ToolRegistry::new(vec![ToolEntry::new(
+            Box::new(MockMcpTool { call_count, risk }),
+            ToolAvailability::Always,
+        )]);
+        registry.set_enabled("mcp__demo__list_docs", true);
+        registry
+    }
+
     fn context<'a>(
         registry: &'a ToolRegistry,
         profile: &'a ProjectProfile,
@@ -795,6 +920,49 @@ mod tests {
         }
     }
 
+    struct MockMcpTool {
+        call_count: Arc<AtomicU64>,
+        risk: RiskLevel,
+    }
+
+    #[async_trait]
+    impl Tool for MockMcpTool {
+        fn descriptor(&self) -> ToolDescriptor {
+            ToolDescriptor {
+                name: "mcp__demo__list_docs",
+                description: "mock mcp tool",
+                provider_id: "mcp:demo",
+                provider_meta: Some(ProviderMeta::Mcp(McpToolMeta {
+                    server_name: "demo",
+                    remote_tool_name: "list_docs",
+                    transport: "http+sse",
+                })),
+                category: ToolCategory::ReadOnly,
+                capabilities: vec![ToolCapability::UnknownExternal],
+                default_risk: self.risk,
+                approval: ApprovalKind::Always,
+            }
+        }
+
+        fn parameters_schema(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                }
+            })
+        }
+
+        async fn execute(&self, _args: Value) -> crate::error::Result<ToolResult> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            Ok(ToolResult::Text {
+                source: "mcp".into(),
+                content: "ok".into(),
+                truncated: false,
+            })
+        }
+    }
+
     struct TestRoot {
         path: PathBuf,
     }
@@ -851,6 +1019,11 @@ fn call_summary(call: &ToolCall, descriptor: Option<&ToolDescriptor>) -> AuditEv
 
     if let Some(descriptor) = descriptor {
         summary.provider_id = Some(descriptor.provider_id.to_string());
+        if let Some(ProviderMeta::Mcp(meta)) = descriptor.provider_meta.as_ref() {
+            summary.server_name = Some(meta.server_name.to_string());
+            summary.remote_tool_name = Some(meta.remote_tool_name.to_string());
+            summary.transport = Some(meta.transport.to_string());
+        }
         summary.capabilities = descriptor
             .capabilities
             .iter()

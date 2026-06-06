@@ -6,4 +6,5 @@ pub const PLAN_MODE_DENIED_CAPABILITIES: &[ToolCapability] = &[
     ToolCapability::RunProjectCommand,
     ToolCapability::NetworkAccess,
     ToolCapability::VcsWrite,
+    ToolCapability::UnknownExternal,
 ];
